@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  postgres-test:
+    image: postgres:16-alpine
+    container_name: vcf-pg-test
+    environment:
+      POSTGRES_USER: vcftest
+      POSTGRES_PASSWORD: vcftest
+      POSTGRES_DB: vcftest
+    ports:
+      - "5435:5432"  # Use 5435 to avoid conflicts with local PostgreSQL
+    volumes:
+      - pgdata-test:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vcftest -d vcftest"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata-test:
