@@ -16,8 +16,6 @@ High-performance VCF-to-PostgreSQL loader with clinical-grade compliance.
 - Follow ruff linting rules
 
 ## Git Commits
-- NEVER list Claude as author or co-author in commits
-- Do not add "Co-Authored-By: Claude" or similar
 - Keep commit messages concise and focused on the "why"
 
 ## Testing

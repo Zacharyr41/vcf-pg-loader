@@ -75,6 +75,8 @@ docs/_build/
 .pybuilder/
 target/
 
+# Dev Docs
+.dev/
 # Jupyter Notebook
 .ipynb_checkpoints
 
@@ -205,3 +207,4 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+.DS_Store

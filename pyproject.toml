@@ -107,7 +107,10 @@ select = [
     "C4",  # flake8-comprehensions
     "UP",  # pyupgrade
 ]
-ignore = ["E501"]  # Line length handled by formatter
+ignore = [
+    "E501",  # Line length handled by formatter
+    "B008",  # Function call in default argument - required for Typer
+]
 
 [tool.mypy]
 python_version = "3.11"
