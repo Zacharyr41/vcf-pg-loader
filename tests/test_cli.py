@@ -9,7 +9,7 @@ from typer.testing import CliRunner
 from vcf_pg_loader.cli import app
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
-runner = CliRunner()
+runner = CliRunner(env={"NO_COLOR": "1", "TERM": "dumb"})
 
 
 class TestCLIHelp:
