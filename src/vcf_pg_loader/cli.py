@@ -1,13 +1,17 @@
 """vcf-pg-loader: High-performance VCF to PostgreSQL loader CLI."""
 
 import asyncio
+import logging
 from pathlib import Path
+from typing import Annotated
 from uuid import UUID
 
 import asyncpg
 import typer
 from rich.console import Console
+from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
 
+from .config import load_config
 from .loader import LoadConfig, VCFLoader
 from .schema import SchemaManager
 
@@ -16,6 +20,23 @@ app = typer.Typer(
     help="Load VCF files into PostgreSQL with clinical-grade compliance"
 )
 console = Console()
+
+
+def setup_logging(verbose: bool, quiet: bool) -> None:
+    """Configure logging based on verbosity flags."""
+    if quiet:
+        level = logging.WARNING
+    elif verbose:
+        level = logging.DEBUG
+    else:
+        level = logging.INFO
+
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        datefmt="%H:%M:%S"
+    )
+    logging.getLogger("vcf_pg_loader").setLevel(level)
 
 
 @app.command()
@@ -32,35 +53,73 @@ def load(
     drop_indexes: bool = typer.Option(True, "--drop-indexes/--keep-indexes", help="Drop indexes during load"),
     human_genome: bool = typer.Option(True, "--human-genome/--no-human-genome", help="Use human chromosome enum type"),
     force: bool = typer.Option(False, "--force", "-f", help="Force reload even if file was already loaded"),
+    config_file: Annotated[Path | None, typer.Option("--config", "-c", help="TOML configuration file")] = None,
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable verbose logging"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    progress: bool = typer.Option(True, "--progress/--no-progress", help="Show progress bar"),
 ) -> None:
     """Load a VCF file into PostgreSQL."""
+    setup_logging(verbose, quiet)
+
     if not vcf_path.exists():
         console.print(f"[red]Error: VCF file not found: {vcf_path}[/red]")
         raise typer.Exit(1)
 
-    config = LoadConfig(
-        batch_size=batch_size,
-        workers=workers,
-        normalize=normalize,
-        drop_indexes=drop_indexes,
-        human_genome=human_genome
-    )
+    if config_file:
+        base_config = load_config(config_file)
+        config = LoadConfig(
+            batch_size=batch_size if batch_size != 50000 else base_config.batch_size,
+            workers=workers if workers != 8 else base_config.workers,
+            normalize=normalize,
+            drop_indexes=drop_indexes,
+            human_genome=human_genome,
+            log_level="DEBUG" if verbose else ("WARNING" if quiet else base_config.log_level),
+        )
+    else:
+        config = LoadConfig(
+            batch_size=batch_size,
+            workers=workers,
+            normalize=normalize,
+            drop_indexes=drop_indexes,
+            human_genome=human_genome,
+            log_level="DEBUG" if verbose else ("WARNING" if quiet else "INFO"),
+        )
 
     loader = VCFLoader(db_url, config)
 
     try:
-        console.print(f"Loading {vcf_path.name}...")
-        result = asyncio.run(loader.load_vcf(vcf_path, force_reload=force))
+        if not quiet:
+            console.print(f"Loading {vcf_path.name}...")
+
+        if progress and not quiet:
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+                console=console,
+            ) as progress_bar:
+                task = progress_bar.add_task("Loading variants...", total=None)
+
+                def update_progress(batch_num: int, batch_size: int, total: int):
+                    progress_bar.update(task, completed=total, description=f"Loaded {total:,} variants")
+
+                config.progress_callback = update_progress
+                result = asyncio.run(loader.load_vcf(vcf_path, force_reload=force))
+        else:
+            result = asyncio.run(loader.load_vcf(vcf_path, force_reload=force))
 
         if result.get("skipped"):
-            console.print("[yellow]⊘[/yellow] Skipped: file already loaded")
-            console.print(f"  Previous Batch ID: {result['previous_load_id']}")
-            console.print(f"  File SHA256: {result['file_hash']}")
-            console.print("  Use --force to reload")
+            if not quiet:
+                console.print("[yellow]⊘[/yellow] Skipped: file already loaded")
+                console.print(f"  Previous Batch ID: {result['previous_load_id']}")
+                console.print(f"  File SHA256: {result['file_hash']}")
+                console.print("  Use --force to reload")
         else:
-            console.print(f"[green]✓[/green] Loaded {result['variants_loaded']:,} variants")
-            console.print(f"  Batch ID: {result['load_batch_id']}")
-            console.print(f"  File SHA256: {result['file_hash']}")
+            if not quiet:
+                console.print(f"[green]✓[/green] Loaded {result['variants_loaded']:,} variants")
+                console.print(f"  Batch ID: {result['load_batch_id']}")
+                console.print(f"  File SHA256: {result['file_hash']}")
 
     except ConnectionError as e:
         console.print(f"[red]Error: Database connection failed: {e}[/red]")

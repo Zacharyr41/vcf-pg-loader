@@ -12,6 +12,11 @@ High-performance VCF to PostgreSQL loader with clinical-grade compliance.
 - **Human and non-human genome support** - chromosome enum for human, TEXT for others
 - **Audit trail** with load batch tracking and validation
 - **CLI interface** with Typer for easy operation
+- **TOML configuration** - file-based configuration with CLI overrides
+- **Progress reporting** - real-time progress bar with `rich`
+- **Structured logging** - configurable verbosity levels
+- **Retry logic** - exponential backoff for transient database failures
+- **Docker support** - multi-stage Dockerfile and docker-compose for development
 
 ## Installation
 
@@ -61,6 +66,11 @@ Options:
   --normalize/--no-normalize      Normalize variants using vt algorithm [default: normalize]
   --drop-indexes/--keep-indexes   Drop indexes during load [default: drop-indexes]
   --human-genome/--no-human-genome  Use human chromosome enum type [default: human-genome]
+  --config, -c                    TOML configuration file
+  --verbose, -v                   Enable verbose logging (DEBUG level)
+  --quiet, -q                     Suppress non-error output
+  --progress/--no-progress        Show progress bar [default: progress]
+  --force, -f                     Force reload even if file was already loaded
 ```
 
 **Normalization**: When enabled (default), variants are left-aligned and trimmed following the vt algorithm. This ensures consistent representation across different variant callers.
@@ -197,6 +207,50 @@ This project was inspired by and builds upon several foundational tools in the g
 - **VCF Format**: Danecek et al. (2011) https://doi.org/10.1093/bioinformatics/btr330
 - **bcftools/HTSlib**: Danecek et al. (2021) https://doi.org/10.1093/gigascience/giab008
 - **GIAB Benchmarks**: Zook et al. (2019) https://doi.org/10.1038/s41587-019-0074-6
+
+## Configuration
+
+vcf-pg-loader supports TOML configuration files for persistent settings:
+
+```toml
+# vcf-pg-loader.toml
+[vcf_pg_loader]
+batch_size = 25000
+workers = 16
+normalize = true
+drop_indexes = true
+human_genome = true
+log_level = "INFO"
+```
+
+Use with the `--config` flag:
+
+```bash
+vcf-pg-loader load sample.vcf.gz --config vcf-pg-loader.toml
+```
+
+CLI arguments override config file values.
+
+## Docker
+
+### Using Docker Compose (recommended for development)
+
+```bash
+# Start PostgreSQL and run a load
+docker-compose up -d postgres
+docker-compose run vcf-pg-loader load /data/sample.vcf.gz --db postgresql://vcfloader:vcfloader@postgres:5432/variants
+
+# Or build and run standalone
+docker build -t vcf-pg-loader .
+docker run vcf-pg-loader --help
+```
+
+### Docker Compose Services
+
+- `postgres`: PostgreSQL 16 with health checks
+- `vcf-pg-loader`: The loader application
+
+Mount your VCF files to `/data` in the container.
 
 ## Development
 
