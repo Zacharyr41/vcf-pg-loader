@@ -168,7 +168,7 @@ class TestHumanGenomeSchema:
         import uuid
         batch_id = uuid.uuid4()
         await db_connection.execute(
-            "INSERT INTO variant_load_audit (load_batch_id, vcf_file_path, vcf_file_md5, reference_genome, status) VALUES ($1, $2, $3, $4, $5)",
+            "INSERT INTO variant_load_audit (load_batch_id, vcf_file_path, vcf_file_hash, reference_genome, status) VALUES ($1, $2, $3, $4, $5)",
             batch_id, '/test.vcf', 'a' * 32, 'GRCh38', 'started'
         )
 
@@ -189,7 +189,7 @@ class TestHumanGenomeSchema:
         import uuid
         batch_id = uuid.uuid4()
         await db_connection.execute(
-            "INSERT INTO variant_load_audit (load_batch_id, vcf_file_path, vcf_file_md5, reference_genome, status) VALUES ($1, $2, $3, $4, $5)",
+            "INSERT INTO variant_load_audit (load_batch_id, vcf_file_path, vcf_file_hash, reference_genome, status) VALUES ($1, $2, $3, $4, $5)",
             batch_id, '/test.vcf', 'a' * 32, 'GRCh38', 'started'
         )
 
@@ -253,7 +253,7 @@ class TestNonHumanGenomeSchema:
         import uuid
         batch_id = uuid.uuid4()
         await db_connection.execute(
-            "INSERT INTO variant_load_audit (load_batch_id, vcf_file_path, vcf_file_md5, reference_genome, status) VALUES ($1, $2, $3, $4, $5)",
+            "INSERT INTO variant_load_audit (load_batch_id, vcf_file_path, vcf_file_hash, reference_genome, status) VALUES ($1, $2, $3, $4, $5)",
             batch_id, '/test.vcf', 'a' * 32, 'custom', 'started'
         )
 
@@ -277,7 +277,7 @@ class TestNonHumanGenomeSchema:
         import uuid
         batch_id = uuid.uuid4()
         await db_connection.execute(
-            "INSERT INTO variant_load_audit (load_batch_id, vcf_file_path, vcf_file_md5, reference_genome, status) VALUES ($1, $2, $3, $4, $5)",
+            "INSERT INTO variant_load_audit (load_batch_id, vcf_file_path, vcf_file_hash, reference_genome, status) VALUES ($1, $2, $3, $4, $5)",
             batch_id, '/test.vcf', 'a' * 32, 'custom', 'started'
         )
 

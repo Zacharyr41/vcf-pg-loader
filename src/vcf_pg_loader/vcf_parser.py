@@ -30,12 +30,20 @@ def get_array_size(number_spec: str, n_alts: int, ploidy: int = 2) -> int:
 class VCFHeaderParser:
     """Parser for VCF header information."""
 
+    ANN_FIELDS = [
+        'Allele', 'Annotation', 'Annotation_Impact', 'Gene_Name', 'Gene_ID',
+        'Feature_Type', 'Feature_ID', 'Transcript_BioType', 'Rank', 'HGVS.c',
+        'HGVS.p', 'cDNA.pos/cDNA.length', 'CDS.pos/CDS.length',
+        'AA.pos/AA.length', 'Distance', 'ERRORS/WARNINGS/INFO'
+    ]
+
     def __init__(self):
         self._info_fields: dict[str, dict[str, str]] = {}
         self._format_fields: dict[str, dict[str, str]] = {}
         self._samples: list[str] = []
         self._contigs: dict[str, dict[str, str]] = {}
         self._csq_fields: list[str] = []
+        self._ann_fields: list[str] = []
 
     @property
     def samples(self) -> list[str]:
@@ -52,6 +60,11 @@ class VCFHeaderParser:
         """Return CSQ field names if present."""
         return self._csq_fields
 
+    @property
+    def ann_fields(self) -> list[str]:
+        """Return ANN field names if present."""
+        return self._ann_fields
+
     def parse_from_vcf(self, vcf) -> None:
         """Parse all header information from a cyvcf2 VCF object."""
         self.parse_info_fields_from_vcf(vcf)
@@ -59,6 +72,7 @@ class VCFHeaderParser:
         self._samples = list(vcf.samples)
         self._parse_contigs_from_vcf(vcf)
         self._parse_csq_from_vcf(vcf)
+        self._parse_ann_from_vcf(vcf)
 
     def parse_info_fields_from_vcf(self, vcf) -> dict[str, dict[str, str]]:
         """Parse INFO field definitions from a cyvcf2 VCF object."""
@@ -113,6 +127,24 @@ class VCFHeaderParser:
                 if 'Format:' in desc:
                     format_part = desc.split('Format:')[-1].strip().strip('"')
                     self._csq_fields = format_part.split('|')
+        except KeyError:
+            pass
+
+    def _parse_ann_from_vcf(self, vcf) -> None:
+        """Parse SnpEff ANN field structure from a cyvcf2 VCF object."""
+        self._ann_fields = []
+        try:
+            ann_info = vcf.get_header_type('ANN')
+            if ann_info:
+                desc = ann_info.get('Description', '')
+                if "'" in desc and '|' in desc:
+                    start = desc.find("'")
+                    end = desc.rfind("'")
+                    if start < end:
+                        format_part = desc[start+1:end]
+                        self._ann_fields = [f.strip() for f in format_part.split('|')]
+                if not self._ann_fields:
+                    self._ann_fields = self.ANN_FIELDS.copy()
         except KeyError:
             pass
 
@@ -209,7 +241,7 @@ class VariantParser:
         self.normalize = normalize
         self.human_genome = human_genome
 
-    def parse_variant(self, variant, csq_fields: list[str]) -> list[VariantRecord]:
+    def parse_variant(self, variant, csq_fields: list[str], ann_fields: list[str] | None = None) -> list[VariantRecord]:
         """Parse a cyvcf2 variant into VariantRecord objects."""
         records = []
         n_alts = len(variant.ALT)
@@ -262,8 +294,9 @@ class VariantParser:
                 original_alt=original_alt
             )
 
-            if hasattr(variant, 'INFO') and 'CSQ' in variant.INFO and csq_fields:
-                annotations = self._parse_csq(variant.INFO['CSQ'], csq_fields, alt)
+            csq_value = variant.INFO.get('CSQ') if hasattr(variant, 'INFO') else None
+            if csq_value and csq_fields:
+                annotations = self._parse_csq(csq_value, csq_fields, alt)
                 if annotations:
                     record.gene = annotations.get('SYMBOL')
                     record.consequence = annotations.get('Consequence')
@@ -271,10 +304,28 @@ class VariantParser:
                     record.hgvs_c = annotations.get('HGVSc')
                     record.hgvs_p = annotations.get('HGVSp')
 
+            ann_value = variant.INFO.get('ANN') if hasattr(variant, 'INFO') else None
+            if ann_value and ann_fields and record.gene is None:
+                annotations = self._parse_ann(ann_value, ann_fields, alt)
+                if annotations:
+                    record.gene = annotations.get('Gene_Name')
+                    record.consequence = annotations.get('Annotation')
+                    record.impact = annotations.get('Annotation_Impact')
+                    record.hgvs_c = annotations.get('HGVS.c')
+                    record.hgvs_p = annotations.get('HGVS.p')
+                    record.transcript = annotations.get('Feature_ID')
+
             if hasattr(variant, 'INFO'):
                 record.af_gnomad = self._safe_float(info_dict.get('gnomAD_AF'))
                 record.cadd_phred = self._safe_float(info_dict.get('CADD_PHRED'))
                 record.clinvar_sig = info_dict.get('CLNSIG')
+
+                if record.gene is None:
+                    record.gene = info_dict.get('SYMBOL')
+                if record.consequence is None:
+                    record.consequence = info_dict.get('Consequence')
+                if record.impact is None:
+                    record.impact = info_dict.get('IMPACT')
 
             records.append(record)
 
@@ -362,11 +413,38 @@ class VariantParser:
                 continue
             ann_dict = dict(zip(fields, values, strict=False))
 
-            # Match to this ALT allele
             if ann_dict.get('Allele', '') != alt:
                 continue
 
             rank = impact_rank.get(ann_dict.get('IMPACT', 'MODIFIER'), 3)
+            if rank < best_rank:
+                best = ann_dict
+                best_rank = rank
+
+        return best
+
+    def _parse_ann(self, ann_value: str, fields: list[str], alt: str) -> dict[str, str] | None:
+        """Parse SnpEff ANN field, selecting worst consequence for this ALT."""
+        impact_rank = {'HIGH': 0, 'MODERATE': 1, 'LOW': 2, 'MODIFIER': 3}
+        best = None
+        best_rank = 999
+
+        for annotation in ann_value.split(','):
+            values = annotation.split('|')
+            if len(values) < 4:
+                continue
+
+            ann_dict = {}
+            for i, field in enumerate(fields):
+                if i < len(values):
+                    ann_dict[field] = values[i]
+
+            allele = ann_dict.get('Allele', '')
+            if allele and allele != alt:
+                continue
+
+            impact = ann_dict.get('Annotation_Impact', 'MODIFIER')
+            rank = impact_rank.get(impact, 3)
             if rank < best_rank:
                 best = ann_dict
                 best_rank = rank
@@ -429,12 +507,13 @@ class VCFStreamingParser:
 
         variant_parser = VariantParser(self.header_parser, normalize=self.normalize, human_genome=self.human_genome)
         csq_fields = self.header_parser.csq_fields
+        ann_fields = self.header_parser.ann_fields
 
         batch: list[VariantRecord] = []
 
         for variant in self._vcf:
             self._variant_count += 1
-            records = variant_parser.parse_variant(variant, csq_fields)
+            records = variant_parser.parse_variant(variant, csq_fields, ann_fields)
 
             for record in records:
                 self._record_count += 1

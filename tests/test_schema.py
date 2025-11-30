@@ -101,7 +101,7 @@ class TestSchemaManager:
         assert 'audit_id' in column_names
         assert 'load_batch_id' in column_names
         assert 'vcf_file_path' in column_names
-        assert 'vcf_file_md5' in column_names
+        assert 'vcf_file_hash' in column_names
 
     @pytest.mark.asyncio
     async def test_create_samples_table(self, db_connection):

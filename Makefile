@@ -1,4 +1,4 @@
-.PHONY: help dev-up dev-down dev-restart dev-logs install test lint format clean
+.PHONY: help dev-up dev-down dev-restart dev-logs install test lint format clean test-data test-data-download test-data-clone test-data-status deps
 
 help: ## Show this help message
 	@echo "Available commands:"
@@ -6,6 +6,13 @@ help: ## Show this help message
 
 install: ## Install dependencies
 	uv sync --dev
+
+deps: ## Install system dependencies (bcftools)
+	@if command -v brew >/dev/null 2>&1; then \
+		brew bundle; \
+	else \
+		echo "Install bcftools manually: apt-get install bcftools or conda install -c bioconda bcftools"; \
+	fi
 
 dev-up: ## Start development database
 	@if command -v docker >/dev/null 2>&1; then \
@@ -88,3 +95,26 @@ clean: ## Clean up build artifacts and containers
 	rm -rf dist/ build/ *.egg-info/
 	find . -type d -name __pycache__ -exec rm -rf {} +
 	find . -type f -name "*.pyc" -delete
+
+test-data: test-data-download ## Setup test data (alias for download)
+
+test-data-download: ## Download nf-core test VCFs (~50MB)
+	./scripts/setup_test_data.sh download
+
+test-data-clone: ## Clone full nf-core/test-datasets repo (~2GB)
+	./scripts/setup_test_data.sh clone
+
+test-data-status: ## Show test data status
+	./scripts/setup_test_data.sh status
+
+test-data-clean: ## Remove cached test data
+	./scripts/setup_test_data.sh clean
+
+test-nf-core: test-data ## Run tests with nf-core data
+	uv run pytest -v -m "nf_core"
+
+test-integration: dev-up test-data ## Run integration tests
+	uv run pytest -v -m "integration"
+
+test-acceptance: test-data ## Run acceptance tests
+	uv run pytest -v -m "acceptance"

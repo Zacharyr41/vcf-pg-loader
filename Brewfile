@@ -1,0 +1,2 @@
+brew "bcftools"
+brew "htslib"

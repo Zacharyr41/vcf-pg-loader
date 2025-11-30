@@ -189,7 +189,7 @@ class TestVCFLoader:
             )
             assert row["gene"] == "TP53"
             assert row["consequence"] == "missense_variant"
-            assert row["impact_severity"] == "MODERATE"
+            assert row["impact"] == "MODERATE"
             assert row["hgvs_c"] == "c.743G>A"
             assert row["hgvs_p"] == "p.Arg248Gln"
             assert abs(row["af_gnomad"] - 0.00001) < 0.000001
@@ -273,7 +273,7 @@ class TestVCFLoaderLoadVCF:
 
         assert result["variants_loaded"] == 4
         assert "load_batch_id" in result
-        assert "file_md5" in result
+        assert "file_hash" in result
 
         async with asyncpg.create_pool(db_url) as pool:
             async with pool.acquire() as conn:
@@ -316,7 +316,7 @@ class TestVCFLoaderLoadVCF:
                 assert audit is not None
                 assert audit["status"] == "completed"
                 assert audit["variants_loaded"] == 4
-                assert audit["vcf_file_md5"] == result["file_md5"]
+                assert audit["vcf_file_hash"] == result["file_hash"]
 
 
 @pytest.mark.integration
