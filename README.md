@@ -5,9 +5,11 @@ High-performance VCF to PostgreSQL loader with clinical-grade compliance.
 ## Features
 
 - **Streaming VCF parsing** with cyvcf2 for memory-efficient processing
+- **Variant normalization** using the vt algorithm (left-align and trim)
 - **Number=A/R/G field handling** - proper per-ALT extraction during multi-allelic decomposition
 - **Binary COPY protocol** via asyncpg for maximum insert performance
 - **Chromosome-partitioned tables** for efficient region queries
+- **Human and non-human genome support** - chromosome enum for human, TEXT for others
 - **Audit trail** with load batch tracking and validation
 - **CLI interface** with Typer for easy operation
 
@@ -24,11 +26,20 @@ pip install -e ".[dev]"
 ## Quick Start
 
 ```bash
-# Initialize database schema
+# Initialize database schema (human genome by default)
 vcf-pg-loader init-db --db postgresql://user:pass@localhost/variants
 
-# Load a VCF file
+# Initialize for non-human genomes (e.g., SARS-CoV-2, model organisms)
+vcf-pg-loader init-db --db postgresql://user:pass@localhost/variants --no-human-genome
+
+# Load a VCF file (normalizes variants by default)
 vcf-pg-loader load sample.vcf.gz --db postgresql://user:pass@localhost/variants
+
+# Load without normalization
+vcf-pg-loader load sample.vcf.gz --db postgresql://user:pass@localhost/variants --no-normalize
+
+# Load non-human VCF
+vcf-pg-loader load sarscov2.vcf.gz --db postgresql://user:pass@localhost/variants --no-human-genome
 
 # Validate a completed load
 vcf-pg-loader validate <load-batch-id> --db postgresql://user:pass@localhost/variants
@@ -44,12 +55,17 @@ Load a VCF file into PostgreSQL.
 vcf-pg-loader load <vcf_path> [OPTIONS]
 
 Options:
-  --db, -d        PostgreSQL connection URL [default: postgresql://localhost/variants]
-  --batch, -b     Records per batch [default: 50000]
-  --workers, -w   Parallel workers [default: 8]
-  --normalize/--no-normalize    Normalize variants [default: normalize]
-  --drop-indexes/--keep-indexes Drop indexes during load [default: drop-indexes]
+  --db, -d                        PostgreSQL connection URL [default: postgresql://localhost/variants]
+  --batch, -b                     Records per batch [default: 50000]
+  --workers, -w                   Parallel workers [default: 8]
+  --normalize/--no-normalize      Normalize variants using vt algorithm [default: normalize]
+  --drop-indexes/--keep-indexes   Drop indexes during load [default: drop-indexes]
+  --human-genome/--no-human-genome  Use human chromosome enum type [default: human-genome]
 ```
+
+**Normalization**: When enabled (default), variants are left-aligned and trimmed following the vt algorithm. This ensures consistent representation across different variant callers.
+
+**Genome Type**: Human genome mode uses a PostgreSQL enum for chromosomes (chr1-22, X, Y, M) which provides validation and efficient storage. Non-human mode uses TEXT to support arbitrary chromosome/contig names.
 
 ### `validate`
 
@@ -70,8 +86,11 @@ Initialize the database schema (tables, indexes, extensions).
 vcf-pg-loader init-db [OPTIONS]
 
 Options:
-  --db, -d    PostgreSQL connection URL
+  --db, -d                          PostgreSQL connection URL
+  --human-genome/--no-human-genome  Use human chromosome enum type [default: human-genome]
 ```
+
+**Important**: The genome type must match between `init-db` and `load` commands. Use `--no-human-genome` for both when loading non-human VCFs.
 
 ## Architecture
 

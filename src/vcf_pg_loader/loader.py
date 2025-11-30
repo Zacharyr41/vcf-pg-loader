@@ -21,6 +21,7 @@ class LoadConfig:
     workers: int = 8
     drop_indexes: bool = True
     normalize: bool = True
+    human_genome: bool = True
 
 
 class VCFLoader:
@@ -31,7 +32,7 @@ class VCFLoader:
         self.config = config or LoadConfig()
         self.pool: asyncpg.Pool | None = None
         self.load_batch_id: UUID = uuid4()
-        self._schema_manager = SchemaManager()
+        self._schema_manager = SchemaManager(human_genome=self.config.human_genome)
 
     async def connect(self) -> None:
         """Establish database connection pool."""
@@ -66,7 +67,9 @@ class VCFLoader:
 
         streaming_parser = VCFStreamingParser(
             vcf_path,
-            batch_size=self.config.batch_size
+            batch_size=self.config.batch_size,
+            normalize=self.config.normalize,
+            human_genome=self.config.human_genome
         )
 
         try:

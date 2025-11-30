@@ -204,8 +204,8 @@ chr1\t100\t.\tATG\tAG,ATCG\t30\tPASS\t.
             assert record1.alt == "A", f"First ALT: ALT should be 'A', got '{record1.alt}'"
 
             record2 = records[1]
-            assert record2.ref == "AT", f"Second ALT: REF should be 'AT', got '{record2.ref}'"
-            assert record2.alt == "ATC", f"Second ALT: ALT should be 'ATC', got '{record2.alt}'"
+            assert record2.ref == "T", f"Second ALT: REF should be 'T', got '{record2.ref}'"
+            assert record2.alt == "TC", f"Second ALT: ALT should be 'TC', got '{record2.alt}'"
         finally:
             vcf_path.unlink()
 

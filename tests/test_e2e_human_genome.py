@@ -139,7 +139,7 @@ class TestE2EHumanGenomeCLI:
         )
         assert result.returncode == 0, f"load failed: {result.stderr}"
         assert "Loaded" in result.stdout
-        assert "2627" in result.stdout
+        assert "2,627" in result.stdout
 
     def test_cli_human_rejects_non_human_chromosome(self, initialized_db_human):
         """Human genome mode should reject non-human chromosome names."""

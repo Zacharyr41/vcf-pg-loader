@@ -195,8 +195,8 @@ chr1\t100\t.\tATG\tAG,ATCG\t30\tPASS\t.
                 assert row1["alt"] == "A"
 
                 row2 = rows[1]
-                assert row2["ref"] == "AT"
-                assert row2["alt"] == "ATC"
+                assert row2["ref"] == "T"
+                assert row2["alt"] == "TC"
         finally:
             vcf_path.unlink()
 

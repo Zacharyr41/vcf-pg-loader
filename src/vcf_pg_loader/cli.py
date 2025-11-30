@@ -30,6 +30,7 @@ def load(
     workers: int = typer.Option(8, "--workers", "-w", help="Parallel workers"),
     normalize: bool = typer.Option(True, "--normalize/--no-normalize", help="Normalize variants"),
     drop_indexes: bool = typer.Option(True, "--drop-indexes/--keep-indexes", help="Drop indexes during load"),
+    human_genome: bool = typer.Option(True, "--human-genome/--no-human-genome", help="Use human chromosome enum type"),
 ) -> None:
     """Load a VCF file into PostgreSQL."""
     if not vcf_path.exists():
@@ -40,7 +41,8 @@ def load(
         batch_size=batch_size,
         workers=workers,
         normalize=normalize,
-        drop_indexes=drop_indexes
+        drop_indexes=drop_indexes,
+        human_genome=human_genome
     )
 
     loader = VCFLoader(db_url, config)
@@ -134,13 +136,14 @@ def init_db(
         "--db", "-d",
         help="PostgreSQL connection URL"
     ),
+    human_genome: bool = typer.Option(True, "--human-genome/--no-human-genome", help="Use human chromosome enum type"),
 ) -> None:
     """Initialize database schema."""
     async def run_init() -> None:
         conn = await asyncpg.connect(db_url)
 
         try:
-            schema_manager = SchemaManager()
+            schema_manager = SchemaManager(human_genome=human_genome)
             await schema_manager.create_schema(conn)
             await schema_manager.create_indexes(conn)
             console.print("[green]✓[/green] Database schema initialized")

@@ -40,6 +40,12 @@ class VariantRecord:
     is_coding: bool = False
     is_lof: bool = False
 
+    # Normalization tracking
+    normalized: bool = False
+    original_pos: int | None = None
+    original_ref: str | None = None
+    original_alt: str | None = None
+
     @property
     def variant_type(self) -> str:
         """Classify variant type based on REF and ALT alleles."""
