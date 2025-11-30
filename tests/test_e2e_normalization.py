@@ -100,7 +100,7 @@ chr1\t100\t.\tATG\tAG\t30\tPASS\t.
         """CLI should accept --no-normalize flag."""
         vcf_content = '''##fileformat=VCFv4.2
 #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO
-chr1\t100\t.\tATG\tAG\t30\tPASS\t.
+chr1\t200\t.\tATG\tAG\t30\tPASS\t.
 '''
         import tempfile
         with tempfile.NamedTemporaryFile(mode='w', suffix='.vcf', delete=False) as f:
@@ -129,7 +129,7 @@ chr1\t100\t.\tATG\tAG\t30\tPASS\t.
         """CLI with --normalize should produce normalized variants in database."""
         vcf_content = '''##fileformat=VCFv4.2
 #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO
-chr1\t100\t.\tATG\tAG\t30\tPASS\t.
+chr1\t300\t.\tATG\tAG\t30\tPASS\t.
 '''
         import tempfile
         with tempfile.NamedTemporaryFile(mode='w', suffix='.vcf', delete=False) as f:
@@ -181,7 +181,7 @@ chr1\t100\t.\tATG\tAG\t30\tPASS\t.
         """CLI with --no-normalize should preserve original alleles."""
         vcf_content = '''##fileformat=VCFv4.2
 #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO
-chr1\t100\t.\tATG\tAG\t30\tPASS\t.
+chr1\t400\t.\tATG\tAG\t30\tPASS\t.
 '''
         import tempfile
         with tempfile.NamedTemporaryFile(mode='w', suffix='.vcf', delete=False) as f:

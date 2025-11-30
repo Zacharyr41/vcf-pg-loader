@@ -137,6 +137,31 @@ GIAB_TRIO_EXPECTATIONS = {
     "mendelian_error_rate": 0.001,
 }
 
+GIAB_V421_PUBLICATION_VALUES = {
+    "total_variants_in_benchmark_regions": 4_968_730,
+    "mendelian_violations": 2_502,
+    "mendelian_violation_rate": 0.0005,
+    "putative_de_novo_snvs": 1_110,
+    "putative_de_novo_indels": 213,
+    "putative_de_novo_total": 1_323,
+    "benchmark_regions_coverage_gbp": 2.54,
+    "expected_ti_tv_ratio": (2.0, 2.2),
+    "expected_het_hom_ratio": (1.8, 2.2),
+}
+"""
+Published GIAB v4.2.1 GRCh38 values from:
+- Wagner J et al. Cell Genomics 2(5):100128 (2022). DOI: 10.1016/j.xgen.2022.100128
+- Zook JM et al. Nature Biotechnology 37:561-566 (2019). DOI: 10.1038/s41587-019-0074-6
+
+Slivar expected variant yields per trio (WGS ~30x, DeepVariant):
+- De novo: 1.4 mean (0-5 range acceptable)
+- Autosomal recessive: 0.8 mean (0-3 range acceptable)
+- Compound heterozygotes: 9.2 genes (5-15 acceptable)
+- X-linked recessive: 1.7 mean (0-5 range acceptable)
+
+Source: Pedersen BS et al. npj Genomic Medicine 6:60 (2021). DOI: 10.1038/s41525-021-00227-3
+"""
+
 
 ADDITIONAL_TEST_DATA = {
     "strelka_snvs": {

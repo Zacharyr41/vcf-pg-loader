@@ -38,6 +38,10 @@ class VCFGenerator:
 ##INFO=<ID=GeneticModels,Number=.,Type=String,Description="Inheritance models from GENMOD">
 ##INFO=<ID=Compounds,Number=.,Type=String,Description="Compound pairs from GENMOD">
 ##INFO=<ID=RankScore,Number=.,Type=String,Description="Rank score from GENMOD">
+##INFO=<ID=QD,Number=1,Type=Float,Description="Quality by Depth">
+##INFO=<ID=FS,Number=1,Type=Float,Description="Fisher Strand bias">
+##INFO=<ID=MQ,Number=1,Type=Float,Description="Mapping Quality">
+##INFO=<ID=GQ,Number=1,Type=Integer,Description="Genotype Quality (site-level)">
 ##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
 ##FORMAT=<ID=DP,Number=1,Type=Integer,Description="Read Depth">
 ##FORMAT=<ID=GQ,Number=1,Type=Integer,Description="Genotype Quality">

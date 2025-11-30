@@ -31,6 +31,7 @@ def load(
     normalize: bool = typer.Option(True, "--normalize/--no-normalize", help="Normalize variants"),
     drop_indexes: bool = typer.Option(True, "--drop-indexes/--keep-indexes", help="Drop indexes during load"),
     human_genome: bool = typer.Option(True, "--human-genome/--no-human-genome", help="Use human chromosome enum type"),
+    force: bool = typer.Option(False, "--force", "-f", help="Force reload even if file was already loaded"),
 ) -> None:
     """Load a VCF file into PostgreSQL."""
     if not vcf_path.exists():
@@ -49,11 +50,17 @@ def load(
 
     try:
         console.print(f"Loading {vcf_path.name}...")
-        result = asyncio.run(loader.load_vcf(vcf_path))
+        result = asyncio.run(loader.load_vcf(vcf_path, force_reload=force))
 
-        console.print(f"[green]✓[/green] Loaded {result['variants_loaded']:,} variants")
-        console.print(f"  Batch ID: {result['load_batch_id']}")
-        console.print(f"  File MD5: {result['file_md5']}")
+        if result.get("skipped"):
+            console.print(f"[yellow]⊘[/yellow] Skipped: file already loaded")
+            console.print(f"  Previous Batch ID: {result['previous_load_id']}")
+            console.print(f"  File MD5: {result['file_md5']}")
+            console.print("  Use --force to reload")
+        else:
+            console.print(f"[green]✓[/green] Loaded {result['variants_loaded']:,} variants")
+            console.print(f"  Batch ID: {result['load_batch_id']}")
+            console.print(f"  File MD5: {result['file_md5']}")
 
     except ConnectionError as e:
         console.print(f"[red]Error: Database connection failed: {e}[/red]")
