@@ -22,20 +22,14 @@ class SchemaManager:
 
     async def create_types(self, conn: asyncpg.Connection) -> None:
         """Create custom PostgreSQL types."""
-        await conn.execute("""
-            CREATE TYPE chromosome_type AS ENUM (
-                'chr1', 'chr2', 'chr3', 'chr4', 'chr5', 'chr6', 'chr7', 'chr8', 'chr9',
-                'chr10', 'chr11', 'chr12', 'chr13', 'chr14', 'chr15', 'chr16', 'chr17',
-                'chr18', 'chr19', 'chr20', 'chr21', 'chr22', 'chrX', 'chrY', 'chrM'
-            )
-        """)
+        pass
 
     async def create_variants_table(self, conn: asyncpg.Connection) -> None:
         """Create the main variants table with partitioning."""
         await conn.execute("""
             CREATE TABLE variants (
                 variant_id BIGINT GENERATED ALWAYS AS IDENTITY,
-                chrom chromosome_type NOT NULL,
+                chrom TEXT NOT NULL,
                 pos_range int8range NOT NULL,
                 pos BIGINT NOT NULL,
                 end_pos BIGINT,
@@ -46,11 +40,11 @@ class SchemaManager:
 
                 -- Classification (frequently queried)
                 variant_type VARCHAR(20),
-                rs_id VARCHAR(50),
+                rs_id TEXT,
 
                 -- Extracted annotation fields (indexed)
                 gene VARCHAR(100),
-                transcript VARCHAR(50),
+                transcript VARCHAR(255),
                 hgvs_c VARCHAR(255),
                 hgvs_p VARCHAR(255),
                 consequence VARCHAR(100),
@@ -93,6 +87,10 @@ class SchemaManager:
                 CREATE TABLE {partition_name} PARTITION OF variants
                 FOR VALUES IN ('{chrom}')
             """)
+
+        await conn.execute("""
+            CREATE TABLE variants_other PARTITION OF variants DEFAULT
+        """)
 
     async def create_audit_table(self, conn: asyncpg.Connection) -> None:
         """Create the audit trail table."""

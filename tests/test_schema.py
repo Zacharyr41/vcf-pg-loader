@@ -52,27 +52,9 @@ class TestSchemaManager:
 
     @pytest.mark.asyncio
     async def test_create_types(self, db_connection):
-        """Test creating custom PostgreSQL types."""
+        """Test creating custom PostgreSQL types (currently a no-op for flexibility)."""
         schema_manager = SchemaManager()
         await schema_manager.create_types(db_connection)
-
-        types = await db_connection.fetch("""
-            SELECT typname FROM pg_type WHERE typname = 'chromosome_type'
-        """)
-        assert len(types) == 1
-
-        enum_values = await db_connection.fetch("""
-            SELECT enumlabel FROM pg_enum e
-            JOIN pg_type t ON e.enumtypid = t.oid
-            WHERE t.typname = 'chromosome_type'
-            ORDER BY enumsortorder
-        """)
-        values = [val['enumlabel'] for val in enum_values]
-        assert 'chr1' in values
-        assert 'chr22' in values
-        assert 'chrX' in values
-        assert 'chrY' in values
-        assert 'chrM' in values
 
     @pytest.mark.asyncio
     async def test_create_variants_table(self, db_connection):
@@ -95,6 +77,7 @@ class TestSchemaManager:
         partition_names = [p['tablename'] for p in partitions]
         assert 'variants_1' in partition_names
         assert 'variants_x' in partition_names
+        assert 'variants_other' in partition_names
 
     @pytest.mark.asyncio
     async def test_create_audit_table(self, db_connection):
