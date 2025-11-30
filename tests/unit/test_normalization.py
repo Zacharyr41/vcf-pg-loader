@@ -1,11 +1,12 @@
 """Tests for variant normalization per vt algorithm."""
 
 import pytest
+
 from vcf_pg_loader.normalizer import (
-    normalize_variant,
-    is_normalized,
     classify_variant,
     decompose_multiallelic,
+    is_normalized,
+    normalize_variant,
 )
 
 
@@ -18,7 +19,7 @@ class TestVTNormalization:
             (10, "A", "G", 10, "A", "G"),
             (10, "GATC", "GTTC", 11, "A", "T"),
             (10, "ATCG", "TTCG", 10, "A", "T"),
-            (10, "ACGT", "ACAT", 10, "CG", "CA"),
+            (10, "ACGT", "ACAT", 12, "G", "A"),
         ],
     )
     def test_normalization_cases(self, pos, ref, alt, exp_pos, exp_ref, exp_alt):
@@ -61,8 +62,12 @@ class TestIsNormalized:
 
     def test_normalized_different_endings(self):
         """Variants with different endings are normalized."""
-        assert is_normalized("AT", ["GT"]) is True
+        assert is_normalized("AT", ["GC"]) is True
         assert is_normalized("AC", ["TG"]) is True
+
+    def test_not_normalized_same_ending_mnp(self):
+        """MNPs with same ending need normalization."""
+        assert is_normalized("AT", ["GT"]) is False
 
     def test_not_normalized_same_ending(self):
         """Variants with same ending need normalization."""

@@ -7,8 +7,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from vcf_pg_loader.vcf_parser import VCFStreamingParser, VCFHeaderParser
-from fixtures.vcf_generator import make_genmod_vcf_file, VCFGenerator, SyntheticVariant
+from fixtures.vcf_generator import SyntheticVariant, VCFGenerator
+from vcf_pg_loader.vcf_parser import VCFStreamingParser
 
 
 @pytest.mark.integration

@@ -1,37 +1,70 @@
 """nf-core test dataset references and management."""
 
-from pathlib import Path
 import hashlib
+import os
+import shutil
 import subprocess
 import urllib.request
+from pathlib import Path
+
+NF_CORE_TEST_DATA_BASE_URL = "https://raw.githubusercontent.com/nf-core/test-datasets/modules/data"
 
 NF_CORE_TEST_DATA = {
     "dbsnp_146_hg38": {
-        "url": "https://raw.githubusercontent.com/nf-core/test-datasets/modules/data/genomics/homo_sapiens/genome/vcf/dbsnp_146.hg38.vcf.gz",
-        "md5": None,
+        "url": f"{NF_CORE_TEST_DATA_BASE_URL}/genomics/homo_sapiens/genome/vcf/dbsnp_146.hg38.vcf.gz",
+        "local_path": "genomics/homo_sapiens/genome/vcf/dbsnp_146.hg38.vcf.gz",
         "description": "dbSNP subset used by nf-core/sarek tests",
     },
     "gnomad_r2_hg38": {
-        "url": "https://raw.githubusercontent.com/nf-core/test-datasets/modules/data/genomics/homo_sapiens/genome/vcf/gnomAD.r2.1.1.vcf.gz",
-        "md5": None,
+        "url": f"{NF_CORE_TEST_DATA_BASE_URL}/genomics/homo_sapiens/genome/vcf/gnomAD.r2.1.1.vcf.gz",
+        "local_path": "genomics/homo_sapiens/genome/vcf/gnomAD.r2.1.1.vcf.gz",
         "description": "gnomAD subset for germline resource testing",
     },
     "mills_1000g_indels": {
-        "url": "https://raw.githubusercontent.com/nf-core/test-datasets/modules/data/genomics/homo_sapiens/genome/vcf/mills_and_1000G.indels.vcf.gz",
-        "md5": None,
+        "url": f"{NF_CORE_TEST_DATA_BASE_URL}/genomics/homo_sapiens/genome/vcf/mills_and_1000G.indels.vcf.gz",
+        "local_path": "genomics/homo_sapiens/genome/vcf/mills_and_1000G.indels.vcf.gz",
         "description": "Known indels for BQSR testing",
     },
-    "sarek_test_vcf": {
-        "url": "https://raw.githubusercontent.com/nf-core/test-datasets/sarek/testdata/vcf/test.vcf.gz",
-        "md5": None,
-        "description": "Sarek test VCF output",
+    "haplotypecaller_vcf": {
+        "url": f"{NF_CORE_TEST_DATA_BASE_URL}/genomics/homo_sapiens/illumina/gatk/haplotypecaller_calls/test_haplotc.vcf.gz",
+        "local_path": "genomics/homo_sapiens/illumina/gatk/haplotypecaller_calls/test_haplotc.vcf.gz",
+        "description": "HaplotypeCaller output VCF",
+    },
+    "haplotypecaller_ann_vcf": {
+        "url": f"{NF_CORE_TEST_DATA_BASE_URL}/genomics/homo_sapiens/illumina/gatk/haplotypecaller_calls/test_haplotc.ann.vcf.gz",
+        "local_path": "genomics/homo_sapiens/illumina/gatk/haplotypecaller_calls/test_haplotc.ann.vcf.gz",
+        "description": "HaplotypeCaller annotated VCF (SnpEff/VEP)",
+    },
+    "mutect2_vcf": {
+        "url": f"{NF_CORE_TEST_DATA_BASE_URL}/genomics/homo_sapiens/illumina/gatk/paired_mutect2_calls/test_test2_paired_mutect2_calls.vcf.gz",
+        "local_path": "genomics/homo_sapiens/illumina/gatk/paired_mutect2_calls/test_test2_paired_mutect2_calls.vcf.gz",
+        "description": "Mutect2 somatic VCF",
+    },
+    "mutect2_filtered_vcf": {
+        "url": f"{NF_CORE_TEST_DATA_BASE_URL}/genomics/homo_sapiens/illumina/gatk/paired_mutect2_calls/test_test2_paired_filtered_mutect2_calls.vcf.gz",
+        "local_path": "genomics/homo_sapiens/illumina/gatk/paired_mutect2_calls/test_test2_paired_filtered_mutect2_calls.vcf.gz",
+        "description": "Mutect2 filtered somatic VCF",
+    },
+    "genmod_vcf": {
+        "url": f"{NF_CORE_TEST_DATA_BASE_URL}/genomics/homo_sapiens/illumina/vcf/genmod.vcf.gz",
+        "local_path": "genomics/homo_sapiens/illumina/vcf/genmod.vcf.gz",
+        "description": "GENMOD annotated VCF (raredisease)",
+    },
+    "na12878_giab_chr22": {
+        "url": f"{NF_CORE_TEST_DATA_BASE_URL}/genomics/homo_sapiens/illumina/vcf/NA12878_GIAB.chr22.vcf.gz",
+        "local_path": "genomics/homo_sapiens/illumina/vcf/NA12878_GIAB.chr22.vcf.gz",
+        "description": "NA12878 GIAB chr22 benchmark",
+    },
+    "na12878_giab_chr21_22": {
+        "url": f"{NF_CORE_TEST_DATA_BASE_URL}/genomics/homo_sapiens/illumina/vcf/NA12878_GIAB.chr21_22.vcf.gz",
+        "local_path": "genomics/homo_sapiens/illumina/vcf/NA12878_GIAB.chr21_22.vcf.gz",
+        "description": "NA12878 GIAB chr21-22 benchmark",
     },
 }
 
 GIAB_BENCHMARK_DATA = {
     "HG002_benchmark": {
         "url": "https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/AshkenazimTrio/HG002_NA24385_son/NISTv4.2.1/GRCh38/HG002_GRCh38_1_22_v4.2.1_benchmark.vcf.gz",
-        "bed_url": "https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/AshkenazimTrio/HG002_NA24385_son/NISTv4.2.1/GRCh38/HG002_GRCh38_1_22_v4.2.1_benchmark_noinconsistent.bed",
         "variants": 4_042_186,
         "description": "Son/proband - ~4M variants",
     },
@@ -45,22 +78,6 @@ GIAB_BENCHMARK_DATA = {
         "variants": 4_052_103,
         "description": "Mother",
     },
-    "HG002_chr21_subset": {
-        "description": "Chr21 only (~150K variants) - fast CI testing",
-        "region": "chr21",
-        "expected_variants": 150_000,
-    },
-}
-
-CLINICAL_DATA = {
-    "clinvar_grch38": {
-        "url": "https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_GRCh38/clinvar.vcf.gz",
-        "description": "Full ClinVar - ~2M variants, tests annotation parsing",
-    },
-    "gnomad_chr21": {
-        "url": "https://storage.googleapis.com/gcp-public-data--gnomad/release/3.1.1/vcf/genomes/gnomad.genomes.v3.1.1.sites.chr21.vcf.bgz",
-        "description": "gnomAD chr21 - tests population frequency fields",
-    },
 }
 
 GIAB_TRIO_EXPECTATIONS = {
@@ -71,22 +88,65 @@ GIAB_TRIO_EXPECTATIONS = {
 }
 
 
+ADDITIONAL_TEST_DATA = {
+    "strelka_snvs": {
+        "local_paths": [
+            "test_data/HCC1395T_vs_HCC1395N.strelka.somatic_snvs_chr22.vcf.gz",
+        ],
+        "description": "Strelka2 somatic SNVs",
+    },
+    "strelka_indels": {
+        "local_paths": [
+            "test_data/HCC1395T_vs_HCC1395N.strelka.somatic_indels_chr22.vcf.gz",
+        ],
+        "description": "Strelka2 somatic indels",
+    },
+}
+
+
+def find_local_test_datasets() -> Path | None:
+    """Find local nf-core/test-datasets clone."""
+    search_paths = [
+        Path(os.environ.get("NF_CORE_TEST_DATASETS", "")),
+        Path.home() / "Code" / "test-datasets",
+        Path.home() / "Code" / "other-test-data" / "test-datasets",
+        Path.home() / "nf-core" / "test-datasets",
+        Path("/data/test-datasets"),
+        Path.cwd().parent / "test-datasets",
+    ]
+
+    for p in search_paths:
+        if p.exists() and (p / "data" / "genomics").exists():
+            return p / "data"
+
+    return None
+
+
 class TestDataManager:
     """Manages test data downloads with caching."""
 
     def __init__(self, cache_dir: Path | None = None):
         self.cache_dir = cache_dir or Path.home() / ".cache" / "vcf-pg-loader-tests"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.local_test_datasets = find_local_test_datasets()
 
     def get_vcf(self, dataset_key: str, subset_region: str | None = None) -> Path:
-        """Download and cache a test VCF, optionally subsetting by region."""
-        all_data = {**NF_CORE_TEST_DATA, **GIAB_BENCHMARK_DATA, **CLINICAL_DATA}
+        """Get a test VCF, using local clone if available, otherwise download."""
+        all_data = {**NF_CORE_TEST_DATA, **GIAB_BENCHMARK_DATA}
         if dataset_key not in all_data:
             raise ValueError(f"Unknown dataset: {dataset_key}")
 
         dataset = all_data[dataset_key]
+
+        if self.local_test_datasets and "local_path" in dataset:
+            local_path = self.local_test_datasets / dataset["local_path"]
+            if local_path.exists():
+                if subset_region:
+                    return self._subset_vcf_safe(local_path, subset_region)
+                return local_path
+
         if "url" not in dataset:
-            raise ValueError(f"Dataset {dataset_key} has no URL")
+            raise ValueError(f"Dataset {dataset_key} has no URL and no local path")
 
         url = dataset["url"]
         filename = url.split("/")[-1]
@@ -96,14 +156,11 @@ class TestDataManager:
             self._download_file(url, cached_path)
 
         if subset_region:
-            subset_path = self.cache_dir / f"{cached_path.stem}_{subset_region}.vcf.gz"
-            if not subset_path.exists():
-                self._subset_vcf(cached_path, subset_path, subset_region)
-            return subset_path
+            return self._subset_vcf_safe(cached_path, subset_region)
 
         return cached_path
 
-    def get_giab_chr21(self, sample: str = "HG002") -> Path:
+    def get_giab_chr21(self, sample: str = "HG002") -> Path | None:
         """Get chr21 subset of GIAB sample for fast testing."""
         try:
             full_vcf = self.get_vcf(f"{sample}_benchmark")
@@ -113,12 +170,33 @@ class TestDataManager:
         subset_path = self.cache_dir / f"{sample}_chr21.vcf.gz"
 
         if not subset_path.exists():
+            if not self._has_bcftools():
+                return None
             self._subset_vcf(full_vcf, subset_path, "chr21")
 
         return subset_path
 
     def get_nf_core_output(self, pipeline: str, output_type: str) -> Path | None:
-        """Get output from nf-core pipeline test run."""
+        """Get output from nf-core pipeline test run or pre-generated test data."""
+        if pipeline == "sarek":
+            if output_type == "annotation":
+                try:
+                    return self.get_vcf("haplotypecaller_ann_vcf")
+                except Exception:
+                    pass
+            elif output_type == "variants":
+                try:
+                    return self.get_vcf("haplotypecaller_vcf")
+                except Exception:
+                    pass
+
+        if pipeline == "raredisease":
+            if output_type in ("annotation", "variants"):
+                try:
+                    return self.get_vcf("genmod_vcf")
+                except Exception:
+                    pass
+
         test_output_dir = self.cache_dir / "nf_core_outputs" / pipeline
         if not test_output_dir.exists():
             return None
@@ -134,6 +212,22 @@ class TestDataManager:
 
     def get_sarek_caller_output(self, caller: str) -> Path | None:
         """Get VCF from specific sarek variant caller."""
+        caller_datasets = {
+            "haplotypecaller": "haplotypecaller_vcf",
+            "mutect2": "mutect2_filtered_vcf",
+        }
+
+        if caller in caller_datasets:
+            try:
+                return self.get_vcf(caller_datasets[caller])
+            except Exception:
+                pass
+
+        if caller == "strelka":
+            strelka_vcf = self._find_additional_test_data("strelka_snvs")
+            if strelka_vcf:
+                return strelka_vcf
+
         sarek_dir = self.cache_dir / "nf_core_outputs" / "sarek"
         if not sarek_dir.exists():
             return None
@@ -149,8 +243,35 @@ class TestDataManager:
         vcf_files = list(sarek_dir.glob(f"**/{pattern}"))
         return vcf_files[0] if vcf_files else None
 
+    def _find_additional_test_data(self, key: str) -> Path | None:
+        """Find additional test data from local repos."""
+        if key not in ADDITIONAL_TEST_DATA:
+            return None
+
+        search_dirs = [
+            Path.home() / "Code" / "test-datasets",
+            Path.home() / "Code" / "other-test-data" / "test-datasets",
+            Path.cwd().parent / "test-datasets",
+        ]
+
+        for base_dir in search_dirs:
+            if not base_dir.exists():
+                continue
+            for local_path in ADDITIONAL_TEST_DATA[key]["local_paths"]:
+                full_path = base_dir / local_path
+                if full_path.exists():
+                    return full_path
+
+        return None
+
     def get_sarek_somatic_output(self, caller: str) -> Path | None:
         """Get somatic VCF from sarek."""
+        if caller == "mutect2":
+            try:
+                return self.get_vcf("mutect2_filtered_vcf")
+            except Exception:
+                pass
+
         sarek_dir = self.cache_dir / "nf_core_outputs" / "sarek_somatic"
         if not sarek_dir.exists():
             return None
@@ -158,10 +279,26 @@ class TestDataManager:
         vcf_files = list(sarek_dir.glob(f"**/*{caller}*.vcf.gz"))
         return vcf_files[0] if vcf_files else None
 
+    def _has_bcftools(self) -> bool:
+        """Check if bcftools is available."""
+        return shutil.which("bcftools") is not None
+
     def _download_file(self, url: str, dest: Path) -> None:
         """Download a file from URL to destination."""
         dest.parent.mkdir(parents=True, exist_ok=True)
         urllib.request.urlretrieve(url, dest)
+        if dest.suffix == ".gz" and self._has_bcftools():
+            subprocess.run(["bcftools", "index", str(dest)], check=False)
+
+    def _subset_vcf_safe(self, input_vcf: Path, region: str) -> Path:
+        """Subset VCF if bcftools available, otherwise return original."""
+        if not self._has_bcftools():
+            return input_vcf
+
+        subset_path = self.cache_dir / f"{input_vcf.stem}_{region}.vcf.gz"
+        if not subset_path.exists():
+            self._subset_vcf(input_vcf, subset_path, region)
+        return subset_path
 
     def _subset_vcf(self, input_vcf: Path, output_vcf: Path, region: str) -> None:
         """Subset VCF to a specific region using bcftools."""
@@ -187,3 +324,23 @@ class TestDataManager:
             for chunk in iter(lambda: f.read(4096), b""):
                 hash_md5.update(chunk)
         return hash_md5.hexdigest()
+
+    def list_available_datasets(self) -> dict[str, bool]:
+        """List all datasets and their availability."""
+        result = {}
+        all_data = {**NF_CORE_TEST_DATA, **GIAB_BENCHMARK_DATA}
+
+        for key, dataset in all_data.items():
+            available = False
+
+            if self.local_test_datasets and "local_path" in dataset:
+                local_path = self.local_test_datasets / dataset["local_path"]
+                available = local_path.exists()
+
+            if not available and "url" in dataset:
+                cached_path = self.cache_dir / dataset["url"].split("/")[-1]
+                available = cached_path.exists()
+
+            result[key] = available
+
+        return result

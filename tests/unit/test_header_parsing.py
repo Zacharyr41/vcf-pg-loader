@@ -1,6 +1,7 @@
 """Tests for VCF header parsing functionality."""
 
 import pytest
+
 from vcf_pg_loader.vcf_parser import VCFHeaderParser
 
 

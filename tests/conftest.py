@@ -9,13 +9,13 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from fixtures.nf_core_datasets import TestDataManager
 from fixtures.vcf_generator import (
-    VCFGenerator,
     SyntheticVariant,
+    VCFGenerator,
+    make_genmod_vcf_file,
     make_multiallelic_vcf_file,
+    make_trio_vcf_file,
     make_unnormalized_vcf_file,
     make_vep_csq_vcf_file,
-    make_trio_vcf_file,
-    make_genmod_vcf_file,
 )
 
 try:
@@ -32,10 +32,9 @@ def test_data_dir() -> Path:
 
 
 @pytest.fixture(scope="session")
-def test_data_manager(tmp_path_factory) -> TestDataManager:
+def test_data_manager() -> TestDataManager:
     """Manage test data downloads with caching."""
-    cache_dir = tmp_path_factory.mktemp("vcf_test_data")
-    return TestDataManager(cache_dir)
+    return TestDataManager()
 
 
 @pytest.fixture(scope="session")
@@ -52,6 +51,7 @@ def postgres_container():
 async def test_db(postgres_container):
     """Create isolated test database connection."""
     import asyncpg
+
     from vcf_pg_loader.schema import SchemaManager
 
     conn = await asyncpg.connect(postgres_container.get_connection_url())
@@ -68,6 +68,7 @@ async def test_db(postgres_container):
 async def test_db_non_human(postgres_container):
     """Create isolated test database for non-human genome."""
     import asyncpg
+
     from vcf_pg_loader.schema import SchemaManager
 
     conn = await asyncpg.connect(postgres_container.get_connection_url())

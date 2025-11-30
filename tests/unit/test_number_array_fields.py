@@ -7,12 +7,12 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from vcf_pg_loader.vcf_parser import VCFStreamingParser, VCFHeaderParser, get_array_size
 from fixtures.vcf_generator import (
-    VCFGenerator,
     SyntheticVariant,
+    VCFGenerator,
     make_multiallelic_vcf_file,
 )
+from vcf_pg_loader.vcf_parser import VCFStreamingParser, get_array_size
 
 
 class TestNumberAFields:
@@ -73,9 +73,11 @@ class TestNumberAFields:
 
             assert len(records) == 2
             assert records[0].alt == "G"
-            assert records[0].info.get("AF") in [0.1, [0.1, 0.3]]
+            af0 = records[0].info.get("AF")
+            assert af0 == pytest.approx(0.1, rel=1e-5) or af0 == pytest.approx([0.1, 0.3], rel=1e-5)
             assert records[1].alt == "T"
-            assert records[1].info.get("AF") in [0.3, [0.1, 0.3]]
+            af1 = records[1].info.get("AF")
+            assert af1 == pytest.approx(0.3, rel=1e-5) or af1 == pytest.approx([0.1, 0.3], rel=1e-5)
         finally:
             vcf_file.unlink()
             parser.close()

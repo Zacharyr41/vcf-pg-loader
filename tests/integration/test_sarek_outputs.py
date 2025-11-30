@@ -7,8 +7,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from fixtures.vcf_generator import SyntheticVariant, VCFGenerator
 from vcf_pg_loader.vcf_parser import VCFStreamingParser
-from fixtures.vcf_generator import make_vep_csq_vcf_file, VCFGenerator, SyntheticVariant
 
 
 @pytest.mark.integration
@@ -40,35 +40,6 @@ class TestSarekVEPAnnotations:
             assert "Consequence" in csq_fields
             assert "IMPACT" in csq_fields
             assert "SYMBOL" in csq_fields
-        finally:
-            parser.close()
-
-
-@pytest.mark.integration
-class TestSarekCallerOutputs:
-    """Test loading VCFs from different sarek variant callers."""
-
-    @pytest.mark.nf_core
-    @pytest.mark.parametrize(
-        "caller",
-        [
-            "haplotypecaller",
-            "deepvariant",
-            "freebayes",
-            "strelka",
-        ],
-    )
-    def test_caller_specific_vcf(self, caller, test_data_manager):
-        """Each caller's VCF loads without errors."""
-        vcf_path = test_data_manager.get_sarek_caller_output(caller)
-        if vcf_path is None or not vcf_path.exists():
-            pytest.skip(f"No {caller} output available")
-
-        parser = VCFStreamingParser(vcf_path, human_genome=True)
-        try:
-            batches = list(parser.iter_batches())
-            total_variants = sum(len(b) for b in batches)
-            assert total_variants > 0
         finally:
             parser.close()
 

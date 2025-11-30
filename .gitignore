@@ -208,3 +208,6 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 .DS_Store
+
+# Test data cache (downloaded GIAB/nf-core files)
+test_data_cache/

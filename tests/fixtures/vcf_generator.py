@@ -1,9 +1,8 @@
 """Synthetic VCF generator for unit tests."""
 
-from dataclasses import dataclass, field
-from io import StringIO
-from pathlib import Path
 import tempfile
+from dataclasses import dataclass, field
+from pathlib import Path
 
 
 @dataclass

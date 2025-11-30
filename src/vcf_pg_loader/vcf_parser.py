@@ -262,8 +262,9 @@ class VariantParser:
                 original_alt=original_alt
             )
 
-            if hasattr(variant, 'INFO') and 'CSQ' in variant.INFO and csq_fields:
-                annotations = self._parse_csq(variant.INFO['CSQ'], csq_fields, alt)
+            csq_value = variant.INFO.get('CSQ') if hasattr(variant, 'INFO') else None
+            if csq_value and csq_fields:
+                annotations = self._parse_csq(csq_value, csq_fields, alt)
                 if annotations:
                     record.gene = annotations.get('SYMBOL')
                     record.consequence = annotations.get('Consequence')
