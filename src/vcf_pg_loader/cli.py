@@ -53,7 +53,7 @@ def load(
         result = asyncio.run(loader.load_vcf(vcf_path, force_reload=force))
 
         if result.get("skipped"):
-            console.print(f"[yellow]⊘[/yellow] Skipped: file already loaded")
+            console.print("[yellow]⊘[/yellow] Skipped: file already loaded")
             console.print(f"  Previous Batch ID: {result['previous_load_id']}")
             console.print(f"  File MD5: {result['file_md5']}")
             console.print("  Use --force to reload")
