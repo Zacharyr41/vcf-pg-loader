@@ -456,3 +456,353 @@ chr1	100400	.	A	T	80	PASS	.	GT	0/1
             assert len(records_without_af) >= 1, "Should handle missing AF"
         finally:
             parser.close()
+
+
+SNPEFF_FIXTURES_DIR = Path(__file__).parent.parent / "fixtures" / "snpeff"
+
+
+@pytest.mark.integration
+class TestSnpEffRealFilesParsing:
+    """Integration tests using actual SnpEff test files.
+
+    Source: pcingola/SnpEff repository (examples/ and tests/)
+    Files copied to tests/fixtures/snpeff/
+    """
+
+    def test_snpeff_test_ann_vcf_basic_parsing(self):
+        """Parse SnpEff test.ann.vcf with multiple transcripts per variant.
+
+        Source: SnpEff examples/test.ann.vcf
+        Contains: upstream/downstream variants, custom annotations, intergenic regions
+        """
+        vcf_path = SNPEFF_FIXTURES_DIR / "test.ann.vcf"
+        if not vcf_path.exists():
+            pytest.skip("SnpEff test.ann.vcf fixture not available")
+
+        parser = VCFStreamingParser(vcf_path, human_genome=False)
+        try:
+            records = []
+            for batch in parser.iter_batches():
+                records.extend(batch)
+
+            assert len(records) >= 1, "Should parse at least 1 variant"
+
+            record = records[0]
+            assert "ANN" in record.info
+            assert record.gene is not None or "DDX11L1" in str(record.info.get("ANN", ""))
+        finally:
+            parser.close()
+
+    def test_snpeff_cancer_ann_vcf_multiallelic(self):
+        """Parse SnpEff cancer.ann.vcf with multi-allelic variants and warnings.
+
+        Source: SnpEff examples/cancer.ann.vcf
+        Contains: Multi-allelic (C,G), compound alleles (G-C), WARNING_REF_DOES_NOT_MATCH_GENOME
+        """
+        vcf_path = SNPEFF_FIXTURES_DIR / "cancer.ann.vcf"
+        if not vcf_path.exists():
+            pytest.skip("SnpEff cancer.ann.vcf fixture not available")
+
+        parser = VCFStreamingParser(vcf_path, human_genome=False)
+        try:
+            records = []
+            for batch in parser.iter_batches():
+                records.extend(batch)
+
+            assert len(records) >= 2, "Multi-allelic should decompose to 2+ records"
+
+            impacts = {r.impact for r in records if r.impact}
+            assert "HIGH" in impacts, "Should have HIGH impact (start_lost)"
+
+            has_lof = any("LOF" in r.info for r in records)
+            assert has_lof, "Should have LOF annotation"
+        finally:
+            parser.close()
+
+    def test_snpeff_cancer_pedigree_ann_vcf_warnings(self):
+        """Parse SnpEff cancer_pedigree.ann.vcf with warning codes.
+
+        Source: SnpEff examples/cancer_pedigree.ann.vcf
+        Contains: WARNING_REF_DOES_NOT_MATCH_GENOME in field 16
+        """
+        vcf_path = SNPEFF_FIXTURES_DIR / "cancer_pedigree.ann.vcf"
+        if not vcf_path.exists():
+            pytest.skip("SnpEff cancer_pedigree.ann.vcf fixture not available")
+
+        parser = VCFStreamingParser(vcf_path, human_genome=False)
+        try:
+            records = []
+            for batch in parser.iter_batches():
+                records.extend(batch)
+
+            assert len(records) >= 3, "Should parse at least 3 multi-allelic variants"
+
+            ann_values = [str(r.info.get("ANN", "")) for r in records]
+            has_warning = any("WARNING_REF_DOES_NOT_MATCH_GENOME" in ann for ann in ann_values)
+            assert has_warning, "Should preserve WARNING_REF_DOES_NOT_MATCH_GENOME"
+        finally:
+            parser.close()
+
+    def test_snpeff_chr22_subset_diverse_consequences(self):
+        """Parse SnpEff test.chr22.ann.vcf subset with diverse consequence types.
+
+        Source: SnpEff examples/test.chr22.ann.vcf (first 100 lines)
+        Contains: missense, synonymous, stop_gained, UTR variants, splice variants
+        """
+        vcf_path = SNPEFF_FIXTURES_DIR / "test.chr22.ann.subset.vcf"
+        if not vcf_path.exists():
+            pytest.skip("SnpEff test.chr22.ann.subset.vcf fixture not available")
+
+        parser = VCFStreamingParser(vcf_path, human_genome=False)
+        try:
+            records = []
+            for batch in parser.iter_batches():
+                records.extend(batch)
+
+            assert len(records) >= 50, "Should parse many variants from chr22"
+
+            consequences = {r.consequence for r in records if r.consequence}
+            assert len(consequences) >= 3, "Should have diverse consequence types"
+
+            impacts = {r.impact for r in records if r.impact}
+            assert "MODERATE" in impacts, "Should have MODERATE impact variants"
+        finally:
+            parser.close()
+
+    def test_snpeff_plus_sign_combined_effects(self):
+        """Parse VCF with + separator for combined effects (legacy format).
+
+        Source: SnpEff tests/unity/vcf/test_vcf_ann_plus_sign.vcf
+        Contains: 5_prime_UTR_truncation+exon_loss_variant with + separator
+        """
+        vcf_path = SNPEFF_FIXTURES_DIR / "test_vcf_ann_plus_sign.vcf"
+        if not vcf_path.exists():
+            pytest.skip("SnpEff test_vcf_ann_plus_sign.vcf fixture not available")
+
+        parser = VCFStreamingParser(vcf_path, human_genome=False)
+        try:
+            records = []
+            for batch in parser.iter_batches():
+                records.extend(batch)
+
+            assert len(records) >= 1, "Should parse the variant"
+
+            ann_value = str(records[0].info.get("ANN", ""))
+            assert "5_prime_UTR_truncation" in ann_value or "exon_loss_variant" in ann_value
+            assert "INFO_REALIGN_3_PRIME" in ann_value, "Should preserve INFO warning"
+        finally:
+            parser.close()
+
+    def test_snpeff_extract_all_impact_levels(self):
+        """Verify all impact levels are correctly extracted.
+
+        Tests that HIGH, MODERATE, LOW, MODIFIER impacts are properly identified.
+        """
+        vcf_path = SNPEFF_FIXTURES_DIR / "test.chr22.ann.subset.vcf"
+        if not vcf_path.exists():
+            pytest.skip("SnpEff test.chr22.ann.subset.vcf fixture not available")
+
+        parser = VCFStreamingParser(vcf_path, human_genome=False)
+        try:
+            records = []
+            for batch in parser.iter_batches():
+                records.extend(batch)
+
+            impacts = {r.impact for r in records if r.impact}
+
+            valid_impacts = {"HIGH", "MODERATE", "LOW", "MODIFIER"}
+            for impact in impacts:
+                assert impact in valid_impacts, f"Unknown impact: {impact}"
+        finally:
+            parser.close()
+
+    def test_snpeff_gene_extraction_accuracy(self):
+        """Verify gene names are correctly extracted from ANN.
+
+        Source: SnpEff test files
+        """
+        vcf_path = SNPEFF_FIXTURES_DIR / "test.chr22.ann.subset.vcf"
+        if not vcf_path.exists():
+            pytest.skip("SnpEff test.chr22.ann.subset.vcf fixture not available")
+
+        parser = VCFStreamingParser(vcf_path, human_genome=False)
+        try:
+            records = []
+            for batch in parser.iter_batches():
+                records.extend(batch)
+
+            genes = {r.gene for r in records if r.gene}
+            assert len(genes) >= 2, "Should extract multiple gene names"
+
+            for gene in genes:
+                assert gene, "Gene name should not be empty"
+                assert not gene.startswith("|"), "Gene should not contain pipe characters"
+        finally:
+            parser.close()
+
+    def test_snpeff_hgvs_extraction(self):
+        """Verify HGVS.c and HGVS.p are correctly extracted.
+
+        Source: SnpEff test files
+        """
+        vcf_path = SNPEFF_FIXTURES_DIR / "test.chr22.ann.subset.vcf"
+        if not vcf_path.exists():
+            pytest.skip("SnpEff test.chr22.ann.subset.vcf fixture not available")
+
+        parser = VCFStreamingParser(vcf_path, human_genome=False)
+        try:
+            records = []
+            for batch in parser.iter_batches():
+                records.extend(batch)
+
+            records_with_hgvsc = [r for r in records if r.hgvs_c]
+            records_with_hgvsp = [r for r in records if r.hgvs_p]
+
+            assert len(records_with_hgvsc) >= 10, "Should have many variants with HGVS.c"
+            assert len(records_with_hgvsp) >= 5, "Should have variants with HGVS.p"
+
+            for r in records_with_hgvsc[:5]:
+                assert r.hgvs_c.startswith("c.") or r.hgvs_c.startswith("n."), f"Invalid HGVS.c: {r.hgvs_c}"
+
+            for r in records_with_hgvsp[:5]:
+                assert r.hgvs_p.startswith("p."), f"Invalid HGVS.p: {r.hgvs_p}"
+        finally:
+            parser.close()
+
+    def test_snpeff_transcript_extraction(self):
+        """Verify transcript IDs are correctly extracted.
+
+        Source: SnpEff test files
+        """
+        vcf_path = SNPEFF_FIXTURES_DIR / "test.chr22.ann.subset.vcf"
+        if not vcf_path.exists():
+            pytest.skip("SnpEff test.chr22.ann.subset.vcf fixture not available")
+
+        parser = VCFStreamingParser(vcf_path, human_genome=False)
+        try:
+            records = []
+            for batch in parser.iter_batches():
+                records.extend(batch)
+
+            records_with_transcript = [r for r in records if r.transcript]
+            assert len(records_with_transcript) >= 10, "Should extract transcript IDs"
+
+            for r in records_with_transcript[:10]:
+                assert r.transcript.startswith("ENST"), f"Expected Ensembl transcript: {r.transcript}"
+        finally:
+            parser.close()
+
+
+@pytest.mark.integration
+class TestSnpEffLegacyEFFFormat:
+    """Tests for legacy EFF format (SnpEff v4.0 and earlier).
+
+    Source: SnpEff tests/unity/vcf/test.EFF_V2.vcf
+    Format: EFF=EFFECT(IMPACT|...) instead of ANN=Allele|Annotation|...
+    """
+
+    def test_eff_format_file_loads_without_crash(self):
+        """Legacy EFF format file loads without crashing.
+
+        Source: SnpEff tests/unity/vcf/test.EFF_V2.vcf
+        Parser should handle gracefully even if it doesn't parse EFF.
+        """
+        vcf_path = SNPEFF_FIXTURES_DIR / "test.EFF_V2.vcf"
+        if not vcf_path.exists():
+            pytest.skip("SnpEff test.EFF_V2.vcf fixture not available")
+
+        parser = VCFStreamingParser(vcf_path, human_genome=False)
+        try:
+            records = []
+            for batch in parser.iter_batches():
+                records.extend(batch)
+
+            assert len(records) >= 1, "Should parse the variant"
+
+            record = records[0]
+            assert "EFF" in record.info, "EFF field should be preserved in info"
+        finally:
+            parser.close()
+
+
+@pytest.mark.integration
+class TestSnpEffAnnotationValidation:
+    """Validation tests for SnpEff annotation parsing accuracy."""
+
+    def test_worst_impact_selection_verified(self):
+        """Verify worst impact is selected when multiple transcripts exist.
+
+        Uses cancer.ann.vcf which has both HIGH and LOW impact annotations.
+        For multi-allelic sites, each ALT has its own record with potentially
+        different impacts - we verify that per-allele worst impact is selected.
+        """
+        vcf_path = SNPEFF_FIXTURES_DIR / "cancer.ann.vcf"
+        if not vcf_path.exists():
+            pytest.skip("SnpEff cancer.ann.vcf fixture not available")
+
+        parser = VCFStreamingParser(vcf_path, human_genome=False)
+        try:
+            records = []
+            for batch in parser.iter_batches():
+                records.extend(batch)
+
+            high_impact_records = [r for r in records if r.impact == "HIGH"]
+            assert len(high_impact_records) >= 1, "Should select HIGH impact when available"
+
+            for record in records:
+                ann = str(record.info.get("ANN", ""))
+                alt = record.alt
+                annotations_for_allele = [a for a in ann.split(",") if a.startswith(f"{alt}|") or a.startswith("|")]
+                if any("|HIGH|" in a for a in annotations_for_allele) and record.impact:
+                    assert record.impact == "HIGH", f"Should select HIGH for allele {alt}, got {record.impact}"
+        finally:
+            parser.close()
+
+    def test_lof_nmd_fields_preserved(self):
+        """Verify LOF and NMD INFO fields are preserved.
+
+        Source: SnpEff cancer.ann.vcf
+        """
+        vcf_path = SNPEFF_FIXTURES_DIR / "cancer.ann.vcf"
+        if not vcf_path.exists():
+            pytest.skip("SnpEff cancer.ann.vcf fixture not available")
+
+        parser = VCFStreamingParser(vcf_path, human_genome=False)
+        try:
+            records = []
+            for batch in parser.iter_batches():
+                records.extend(batch)
+
+            lof_records = [r for r in records if "LOF" in r.info]
+            assert len(lof_records) >= 1, "Should preserve LOF annotations"
+
+            for r in lof_records:
+                lof_value = r.info.get("LOF")
+                assert lof_value is not None
+                assert "OR4F5" in str(lof_value) or "ENSG" in str(lof_value)
+        finally:
+            parser.close()
+
+    def test_field_count_consistency(self):
+        """Verify parsed annotations have consistent field handling.
+
+        All 16-field annotations should be parsed without data loss.
+        """
+        vcf_path = SNPEFF_FIXTURES_DIR / "test.chr22.ann.subset.vcf"
+        if not vcf_path.exists():
+            pytest.skip("SnpEff test.chr22.ann.subset.vcf fixture not available")
+
+        parser = VCFStreamingParser(vcf_path, human_genome=False)
+        try:
+            records = []
+            for batch in parser.iter_batches():
+                records.extend(batch)
+
+            for record in records[:20]:
+                ann = record.info.get("ANN")
+                if ann and isinstance(ann, str):
+                    first_annotation = ann.split(",")[0]
+                    fields = first_annotation.split("|")
+                    assert len(fields) >= 15, f"Expected 16 fields, got {len(fields)}: {first_annotation[:100]}"
+        finally:
+            parser.close()

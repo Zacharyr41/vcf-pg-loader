@@ -217,6 +217,30 @@ class SchemaManager:
             ON variants USING GIN (hgvs_p gin_trgm_ops)
         """)
 
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_variants_impact
+            ON variants (impact)
+            WHERE impact IN ('HIGH', 'MODERATE')
+        """)
+
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_variants_consequence
+            ON variants (consequence)
+            WHERE consequence IS NOT NULL
+        """)
+
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_variants_gene_impact
+            ON variants (gene, impact)
+            WHERE gene IS NOT NULL
+        """)
+
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_variants_transcript
+            ON variants (transcript)
+            WHERE transcript IS NOT NULL
+        """)
+
     async def drop_indexes(self, conn: asyncpg.Connection) -> list[str]:
         """Drop non-primary key indexes and return their names."""
         indexes = await conn.fetch("""

@@ -30,7 +30,11 @@ class VCFGenerator:
 ##INFO=<ID=AN,Number=1,Type=Integer,Description="Total Alleles">
 ##INFO=<ID=AD,Number=R,Type=Integer,Description="Allelic Depths">
 ##INFO=<ID=CSQ,Number=.,Type=String,Description="Consequence annotations from Ensembl VEP. Format: Allele|Consequence|IMPACT|SYMBOL|Gene|Feature_type|Feature">
+##INFO=<ID=ANN,Number=.,Type=String,Description="Functional annotations: 'Allele | Annotation | Annotation_Impact | Gene_Name | Gene_ID | Feature_Type | Feature_ID | Transcript_BioType | Rank | HGVS.c | HGVS.p | cDNA.pos / cDNA.length | CDS.pos / CDS.length | AA.pos / AA.length | Distance | ERRORS / WARNINGS / INFO'">
+##INFO=<ID=LOF,Number=.,Type=String,Description="Predicted loss of function effects">
+##INFO=<ID=NMD,Number=.,Type=String,Description="Predicted nonsense mediated decay effects">
 ##INFO=<ID=SYMBOL,Number=1,Type=String,Description="Gene symbol">
+##INFO=<ID=gnomAD_AF,Number=A,Type=Float,Description="gnomAD allele frequency">
 ##INFO=<ID=GeneticModels,Number=.,Type=String,Description="Inheritance models from GENMOD">
 ##INFO=<ID=Compounds,Number=.,Type=String,Description="Compound pairs from GENMOD">
 ##INFO=<ID=RankScore,Number=.,Type=String,Description="Rank score from GENMOD">
@@ -42,6 +46,7 @@ class VCFGenerator:
 ##contig=<ID=chr1,length=248956422>
 ##contig=<ID=chr2,length=242193529>
 ##contig=<ID=chr3,length=198295559>
+##contig=<ID=chr13,length=114364328>
 ##contig=<ID=chr17,length=83257441>
 ##contig=<ID=chrX,length=156040895>
 ##contig=<ID=chrY,length=57227415>
@@ -364,3 +369,176 @@ def make_genmod_vcf_file() -> Path:
             },
         ),
     ])
+
+
+def make_snpeff_ann(
+    allele: str,
+    annotation: str,
+    impact: str,
+    gene_name: str,
+    gene_id: str,
+    transcript: str,
+    biotype: str = "protein_coding",
+    hgvs_c: str = "",
+    hgvs_p: str = "",
+    rank: str = "",
+    cdna_pos: str = "",
+    cds_pos: str = "",
+    aa_pos: str = "",
+    distance: str = "",
+    warning: str = "",
+) -> str:
+    """Build a SnpEff ANN field string."""
+    return "|".join([
+        allele,
+        annotation,
+        impact,
+        gene_name,
+        gene_id,
+        "transcript",
+        transcript,
+        biotype,
+        rank,
+        hgvs_c,
+        hgvs_p,
+        cdna_pos,
+        cds_pos,
+        aa_pos,
+        distance,
+        warning,
+    ])
+
+
+def make_snpeff_ann_vcf_file() -> Path:
+    """VCF file with SnpEff ANN annotations for database testing."""
+    variants = [
+        SyntheticVariant(
+            chrom="chr17",
+            pos=7578406,
+            ref="C",
+            alt=["G"],
+            info={
+                "ANN": make_snpeff_ann(
+                    allele="G",
+                    annotation="missense_variant",
+                    impact="MODERATE",
+                    gene_name="TP53",
+                    gene_id="ENSG00000141510",
+                    transcript="ENST00000269305",
+                    hgvs_c="c.817C>G",
+                    hgvs_p="p.Pro273Arg",
+                    rank="10/11",
+                ),
+                "gnomAD_AF": 0.00001,
+            },
+        ),
+        SyntheticVariant(
+            chrom="chr17",
+            pos=7578500,
+            ref="A",
+            alt=["T"],
+            info={
+                "ANN": make_snpeff_ann(
+                    allele="T",
+                    annotation="stop_gained",
+                    impact="HIGH",
+                    gene_name="TP53",
+                    gene_id="ENSG00000141510",
+                    transcript="ENST00000269305",
+                    hgvs_c="c.723T>A",
+                    hgvs_p="p.Tyr241*",
+                    rank="9/11",
+                ),
+                "LOF": "(TP53|ENSG00000141510|1|1.00)",
+                "gnomAD_AF": 0.000001,
+            },
+        ),
+        SyntheticVariant(
+            chrom="chr17",
+            pos=7578550,
+            ref="G",
+            alt=["A"],
+            info={
+                "ANN": ",".join([
+                    make_snpeff_ann(
+                        allele="A",
+                        annotation="splice_acceptor_variant",
+                        impact="HIGH",
+                        gene_name="TP53",
+                        gene_id="ENSG00000141510",
+                        transcript="ENST00000269305",
+                        hgvs_c="c.673-2G>A",
+                    ),
+                    make_snpeff_ann(
+                        allele="A",
+                        annotation="downstream_gene_variant",
+                        impact="MODIFIER",
+                        gene_name="WRAP53",
+                        gene_id="ENSG00000141499",
+                        transcript="ENST00000357449",
+                        distance="4500",
+                    ),
+                ]),
+                "gnomAD_AF": 0.0001,
+            },
+        ),
+        SyntheticVariant(
+            chrom="chr13",
+            pos=32936732,
+            ref="C",
+            alt=["A"],
+            info={
+                "ANN": make_snpeff_ann(
+                    allele="A",
+                    annotation="frameshift_variant",
+                    impact="HIGH",
+                    gene_name="BRCA2",
+                    gene_id="ENSG00000139618",
+                    transcript="ENST00000380152",
+                    hgvs_c="c.5946delT",
+                    hgvs_p="p.Ser1982ArgfsTer22",
+                    rank="11/27",
+                ),
+                "LOF": "(BRCA2|ENSG00000139618|1|1.00)",
+                "gnomAD_AF": 0.00005,
+            },
+        ),
+        SyntheticVariant(
+            chrom="chr17",
+            pos=7579000,
+            ref="T",
+            alt=["C"],
+            info={
+                "ANN": make_snpeff_ann(
+                    allele="C",
+                    annotation="synonymous_variant",
+                    impact="LOW",
+                    gene_name="TP53",
+                    gene_id="ENSG00000141510",
+                    transcript="ENST00000269305",
+                    hgvs_c="c.600A>G",
+                    hgvs_p="p.Leu200Leu",
+                ),
+                "gnomAD_AF": 0.05,
+            },
+        ),
+        SyntheticVariant(
+            chrom="chr17",
+            pos=7580000,
+            ref="A",
+            alt=["G"],
+            info={
+                "ANN": make_snpeff_ann(
+                    allele="G",
+                    annotation="intron_variant",
+                    impact="MODIFIER",
+                    gene_name="TP53",
+                    gene_id="ENSG00000141510",
+                    transcript="ENST00000269305",
+                    hgvs_c="c.200+50A>G",
+                ),
+                "gnomAD_AF": 0.15,
+            },
+        ),
+    ]
+    return VCFGenerator.generate_file(variants)
