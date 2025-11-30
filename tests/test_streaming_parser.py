@@ -9,8 +9,6 @@ The streaming parser should:
 
 from pathlib import Path
 
-from cyvcf2 import VCF
-
 from vcf_pg_loader.models import VariantRecord
 from vcf_pg_loader.vcf_parser import VCFHeaderParser, VCFStreamingParser
 
@@ -60,13 +58,11 @@ class TestVCFStreamingParser:
         """All variants should be yielded across batches."""
         vcf_path = FIXTURES_DIR / "with_annotations.vcf"
 
-        vcf = VCF(str(vcf_path))
-        expected_count = sum(1 for _ in vcf)
-
         parser = VCFStreamingParser(vcf_path, batch_size=2)
         total_records = sum(len(batch) for batch in parser.iter_batches())
 
-        assert total_records == expected_count
+        assert total_records == 4
+        assert parser.variant_count == 4
 
     def test_multiallelic_decomposition_in_batches(self):
         """Multi-allelic variants should be decomposed within batches."""

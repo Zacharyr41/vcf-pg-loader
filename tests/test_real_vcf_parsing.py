@@ -12,7 +12,7 @@ Fixtures (modules branch):
 - genmod_sv.vcf.gz: SV variants with CSQ, gnomAD AF (57 variants)
 - annotated_ranked.vcf.gz: VEP CSQ, CADD, genetic models (113 variants)
 - gnomad_subset.vcf.gz: Population-stratified AF fields (3500 variants)
-- gvcf_sample.vcf.gz: gVCF with NON_REF, END blocks (130 records)
+- gvcf_sample.vcf.gz: gVCF with NON_REF, END blocks (130 lines, 136 after decomposition)
 - mills_indels.vcf.gz: Classic indel callset (14 variants)
 """
 
