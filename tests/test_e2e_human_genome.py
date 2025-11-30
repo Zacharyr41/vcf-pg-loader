@@ -4,12 +4,18 @@ These tests verify that the CLI correctly handles human and non-human
 genome configurations. They should FAIL until the feature is implemented.
 """
 
+import re
 import subprocess
 from pathlib import Path
 
 import asyncpg
 import pytest
 from testcontainers.postgres import PostgresContainer
+
+
+def strip_ansi(text: str) -> str:
+    """Remove ANSI escape codes from text."""
+    return re.sub(r'\x1b\[[0-9;]*m', '', text)
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -89,7 +95,8 @@ class TestE2EHumanGenomeCLI:
             timeout=30
         )
         assert result.returncode == 0
-        assert "--human-genome" in result.stdout or "--no-human-genome" in result.stdout
+        clean_output = strip_ansi(result.stdout)
+        assert "--human-genome" in clean_output or "--no-human-genome" in clean_output
 
     def test_cli_load_has_human_genome_flag(self):
         """load command should have --human-genome/--no-human-genome flags."""
@@ -100,7 +107,8 @@ class TestE2EHumanGenomeCLI:
             timeout=30
         )
         assert result.returncode == 0
-        assert "--human-genome" in result.stdout or "--no-human-genome" in result.stdout
+        clean_output = strip_ansi(result.stdout)
+        assert "--human-genome" in clean_output or "--no-human-genome" in clean_output
 
     def test_cli_init_db_creates_chromosome_enum(self, initialized_db_human):
         """init-db with --human-genome should create chromosome_type enum."""

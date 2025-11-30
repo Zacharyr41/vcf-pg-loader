@@ -4,12 +4,18 @@ These tests verify that normalization works through the CLI.
 They should FAIL until normalization is wired into the pipeline.
 """
 
+import re
 import subprocess
 from pathlib import Path
 
 import asyncpg
 import pytest
 from testcontainers.postgres import PostgresContainer
+
+
+def strip_ansi(text: str) -> str:
+    """Remove ANSI escape codes from text."""
+    return re.sub(r'\x1b\[[0-9;]*m', '', text)
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -58,7 +64,8 @@ class TestE2ENormalization:
             timeout=30
         )
         assert result.returncode == 0
-        assert "--normalize" in result.stdout or "--no-normalize" in result.stdout
+        clean_output = strip_ansi(result.stdout)
+        assert "--normalize" in clean_output or "--no-normalize" in clean_output
 
     def test_cli_load_with_normalize(self, initialized_db):
         """CLI should accept --normalize flag."""
