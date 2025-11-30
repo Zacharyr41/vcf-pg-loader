@@ -8,8 +8,14 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from fixtures.nf_core_datasets import GIABDataManager
 from fixtures.vcf_generator import SyntheticVariant, VCFGenerator
 from vcf_pg_loader.vcf_parser import VCFStreamingParser
+
+
+@pytest.fixture(scope="module")
+def data_manager():
+    return GIABDataManager()
 
 
 @pytest.mark.performance
@@ -253,3 +259,112 @@ class TestLargeFilePerformance:
             assert rate > 10000, f"100K parsing rate {rate:.0f}/sec below 10K/sec"
         finally:
             vcf_file.unlink()
+
+
+@pytest.mark.performance
+@pytest.mark.giab
+class TestGIABThroughput:
+    """Performance benchmarks using real GIAB data."""
+
+    @pytest.fixture
+    def hg002_chr21(self, data_manager):
+        path = data_manager.get_giab_chr21("HG002")
+        if path is None or not path.exists():
+            pytest.skip("GIAB HG002 chr21 data not available")
+        return path
+
+    def test_giab_chr21_throughput(self, hg002_chr21):
+        """
+        Benchmark real GIAB chr21 parsing throughput.
+
+        Target: >50K variants/sec for real VCF data.
+        """
+        start = time.perf_counter()
+        parser = VCFStreamingParser(hg002_chr21, human_genome=True, batch_size=10000)
+        total = 0
+        for batch in parser.iter_batches():
+            total += len(batch)
+        elapsed = time.perf_counter() - start
+        parser.close()
+
+        rate = total / elapsed if elapsed > 0 else 0
+
+        assert total > 50_000, f"Expected >50K variants, got {total:,}"
+        assert rate > 10_000, f"GIAB chr21 rate {rate:.0f}/sec below 10K/sec target"
+
+        print(f"\nGIAB chr21: {total:,} variants, {rate:,.0f}/sec")
+
+    def test_giab_vs_synthetic_comparison(self, hg002_chr21):
+        """Compare real vs synthetic VCF parsing performance."""
+        parser = VCFStreamingParser(hg002_chr21, human_genome=True)
+        giab_count = sum(len(b) for b in parser.iter_batches())
+        parser.close()
+
+        variants = [
+            SyntheticVariant(
+                chrom="chr21",
+                pos=10000000 + i * 100,
+                ref="A",
+                alt=["G"],
+            )
+            for i in range(giab_count)
+        ]
+        synthetic_file = VCFGenerator.generate_file(variants)
+
+        try:
+            start = time.perf_counter()
+            parser = VCFStreamingParser(hg002_chr21, human_genome=True, batch_size=10000)
+            for _ in parser.iter_batches():
+                pass
+            giab_time = time.perf_counter() - start
+            parser.close()
+
+            start = time.perf_counter()
+            parser = VCFStreamingParser(synthetic_file, human_genome=True, batch_size=10000)
+            for _ in parser.iter_batches():
+                pass
+            synthetic_time = time.perf_counter() - start
+            parser.close()
+
+            ratio = giab_time / synthetic_time if synthetic_time > 0 else float("inf")
+            assert ratio < 3.0, f"GIAB parsing {ratio:.1f}x slower than synthetic"
+
+            print(f"\nGIAB: {giab_time:.2f}s, Synthetic: {synthetic_time:.2f}s (ratio: {ratio:.2f}x)")
+        finally:
+            synthetic_file.unlink()
+
+
+@pytest.mark.performance
+@pytest.mark.giab
+@pytest.mark.giab_full
+@pytest.mark.slow
+class TestGIABFullThroughput:
+    """Full GIAB file performance benchmarks."""
+
+    @pytest.fixture
+    def hg002_full(self, data_manager):
+        path = data_manager.get_giab_full("HG002")
+        if path is None or not path.exists():
+            pytest.skip("Full GIAB HG002 data not available")
+        return path
+
+    def test_full_giab_throughput(self, hg002_full):
+        """
+        Benchmark full HG002 parsing (~4M variants).
+
+        Target: >50K variants/sec sustained.
+        """
+        start = time.perf_counter()
+        parser = VCFStreamingParser(hg002_full, human_genome=True, batch_size=50000)
+        total = 0
+        for batch in parser.iter_batches():
+            total += len(batch)
+        elapsed = time.perf_counter() - start
+        parser.close()
+
+        rate = total / elapsed if elapsed > 0 else 0
+
+        assert total > 3_900_000, f"Expected ~4M variants, got {total:,}"
+        assert rate > 20_000, f"Full GIAB rate {rate:.0f}/sec below 20K/sec target"
+
+        print(f"\nFull GIAB: {total:,} variants in {elapsed:.1f}s ({rate:,.0f}/sec)")

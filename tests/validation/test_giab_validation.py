@@ -7,7 +7,13 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from fixtures.nf_core_datasets import GIAB_TRIO_EXPECTATIONS, GIABDataManager
 from fixtures.vcf_generator import SyntheticVariant, VCFGenerator
+
+
+@pytest.fixture(scope="module")
+def data_manager():
+    return GIABDataManager()
 
 
 @pytest.mark.validation
@@ -640,3 +646,201 @@ class TestClinicalVariantAccuracy:
             assert "EGFR" in genes
         finally:
             parser.close()
+
+
+@pytest.mark.giab
+@pytest.mark.validation
+class TestRealGIABTrioValidation:
+    """Validation tests using real GIAB Ashkenazi trio data."""
+
+    @pytest.fixture
+    def trio_chr21(self, data_manager):
+        trio = data_manager.get_giab_trio_chr21()
+        if trio is None:
+            pytest.skip("GIAB trio chr21 data not available")
+        return trio
+
+    def _load_variant_positions(self, vcf_path):
+        """Load variant positions as set of (chrom, pos, ref, alt) tuples."""
+        from vcf_pg_loader.vcf_parser import VCFStreamingParser
+
+        parser = VCFStreamingParser(vcf_path, human_genome=True)
+        variants = set()
+        for batch in parser.iter_batches():
+            for r in batch:
+                variants.add((r.chrom, r.pos, r.ref, r.alt))
+        parser.close()
+        return variants
+
+    def test_trio_shared_variants(self, trio_chr21):
+        """Many variants should be shared across trio members."""
+        proband = self._load_variant_positions(trio_chr21["proband"])
+        father = self._load_variant_positions(trio_chr21["father"])
+        mother = self._load_variant_positions(trio_chr21["mother"])
+
+        shared_all = proband & father & mother
+        shared_proband_father = proband & father
+        shared_proband_mother = proband & mother
+
+        assert len(shared_all) > 30_000, f"Expected >30K shared variants, got {len(shared_all):,}"
+        assert len(shared_proband_father) > 40_000
+        assert len(shared_proband_mother) > 40_000
+
+        print("\nShared variants:")
+        print(f"  All three: {len(shared_all):,}")
+        print(f"  Proband-Father: {len(shared_proband_father):,}")
+        print(f"  Proband-Mother: {len(shared_proband_mother):,}")
+
+    def test_mendelian_inheritance_check(self, trio_chr21):
+        """Check Mendelian inheritance consistency.
+
+        Note: Apparent 'errors' include representation differences between
+        independently called VCFs, not just true Mendelian violations.
+        """
+        proband = self._load_variant_positions(trio_chr21["proband"])
+        father = self._load_variant_positions(trio_chr21["father"])
+        mother = self._load_variant_positions(trio_chr21["mother"])
+
+        proband_only = proband - father - mother
+        mendelian_error_rate = len(proband_only) / len(proband) if proband else 0
+
+        assert mendelian_error_rate < 0.05, (
+            f"Mendelian error rate {mendelian_error_rate:.4f} too high (>5%)"
+        )
+
+        print("\nMendelian analysis:")
+        print(f"  Proband variants: {len(proband):,}")
+        print(f"  Proband-only (potential de novo): {len(proband_only):,}")
+        print(f"  Apparent error rate: {mendelian_error_rate:.4f}")
+
+    def test_de_novo_detection(self, trio_chr21):
+        """Detect potential de novo variants."""
+        proband = self._load_variant_positions(trio_chr21["proband"])
+        father = self._load_variant_positions(trio_chr21["father"])
+        mother = self._load_variant_positions(trio_chr21["mother"])
+
+        de_novo_candidates = proband - father - mother
+
+        expected_range = GIAB_TRIO_EXPECTATIONS["de_novo_count"]
+        print(f"\nDe novo candidates on chr21: {len(de_novo_candidates):,}")
+        print(f"  (Note: True de novo rate is {expected_range} per genome)")
+
+    def test_inheritance_patterns(self, trio_chr21):
+        """Validate inheritance patterns in trio."""
+        proband = self._load_variant_positions(trio_chr21["proband"])
+        father = self._load_variant_positions(trio_chr21["father"])
+        mother = self._load_variant_positions(trio_chr21["mother"])
+
+        from_father_only = (proband & father) - mother
+        from_mother_only = (proband & mother) - father
+        from_both = proband & father & mother
+
+        assert len(from_father_only) > 5_000, "Expected substantial paternal inheritance"
+        assert len(from_mother_only) > 5_000, "Expected substantial maternal inheritance"
+        assert len(from_both) > 30_000, "Expected majority shared by all three"
+
+        print("\nInheritance patterns:")
+        print(f"  From father only: {len(from_father_only):,}")
+        print(f"  From mother only: {len(from_mother_only):,}")
+        print(f"  From both parents: {len(from_both):,}")
+
+
+@pytest.mark.giab
+@pytest.mark.giab_full
+@pytest.mark.slow
+@pytest.mark.validation
+class TestRealGIABFullTrioValidation:
+    """Full genome validation with complete GIAB trio (~12M variants)."""
+
+    @pytest.fixture
+    def full_trio(self, data_manager):
+        trio = data_manager.get_giab_trio()
+        if trio is None:
+            pytest.skip("Full GIAB trio data not available")
+        return trio
+
+    def test_full_trio_variant_counts(self, full_trio):
+        """Validate variant counts match expected ranges."""
+        from vcf_pg_loader.vcf_parser import VCFStreamingParser
+
+        for role, vcf_path in full_trio.items():
+            parser = VCFStreamingParser(vcf_path, human_genome=True, batch_size=50000)
+            count = sum(len(b) for b in parser.iter_batches())
+            parser.close()
+
+            assert count > 3_900_000, f"{role} variant count {count:,} too low"
+            assert count < 4_200_000, f"{role} variant count {count:,} too high"
+
+            print(f"{role}: {count:,} variants")
+
+    def test_full_trio_chromosome_distribution(self, full_trio):
+        """Validate variants are distributed across all chromosomes."""
+        from vcf_pg_loader.vcf_parser import VCFStreamingParser
+
+        parser = VCFStreamingParser(full_trio["proband"], human_genome=True, batch_size=50000)
+        chromosomes = set()
+        for batch in parser.iter_batches():
+            for r in batch:
+                chromosomes.add(r.chrom)
+        parser.close()
+
+        expected_chroms = {f"chr{i}" for i in range(1, 23)}
+        missing = expected_chroms - chromosomes
+        assert not missing, f"Missing chromosomes: {missing}"
+
+
+@pytest.mark.giab
+@pytest.mark.validation
+class TestGIABVariantQuality:
+    """Validate variant quality metrics from GIAB data."""
+
+    @pytest.fixture
+    def hg002_chr21(self, data_manager):
+        path = data_manager.get_giab_chr21("HG002")
+        if path is None or not path.exists():
+            pytest.skip("GIAB HG002 chr21 not available")
+        return path
+
+    def test_quality_score_distribution(self, hg002_chr21):
+        """Quality scores should be predominantly high for GIAB benchmark."""
+        from vcf_pg_loader.vcf_parser import VCFStreamingParser
+
+        parser = VCFStreamingParser(hg002_chr21, human_genome=True)
+        quals = []
+        for batch in parser.iter_batches():
+            for r in batch:
+                if r.qual is not None:
+                    quals.append(r.qual)
+        parser.close()
+
+        if quals:
+            avg_qual = sum(quals) / len(quals)
+            high_qual_count = sum(1 for q in quals if q >= 30)
+            high_qual_pct = high_qual_count / len(quals)
+
+            print("\nQuality distribution:")
+            print(f"  Variants with QUAL: {len(quals):,}")
+            print(f"  Average QUAL: {avg_qual:.1f}")
+            print(f"  QUAL >= 30: {high_qual_pct:.1%}")
+
+    def test_filter_field_values(self, hg002_chr21):
+        """Check FILTER field values in GIAB benchmark."""
+        from vcf_pg_loader.vcf_parser import VCFStreamingParser
+
+        parser = VCFStreamingParser(hg002_chr21, human_genome=True)
+        filter_counts = {}
+        for batch in parser.iter_batches():
+            for r in batch:
+                filt = r.filter or "."
+                filter_counts[filt] = filter_counts.get(filt, 0) + 1
+        parser.close()
+
+        total = sum(filter_counts.values())
+        pass_count = filter_counts.get("PASS", 0) + filter_counts.get(".", 0)
+        pass_rate = pass_count / total if total > 0 else 0
+
+        assert pass_rate > 0.95, f"PASS rate {pass_rate:.1%} below 95% for GIAB benchmark"
+
+        print("\nFilter distribution:")
+        for filt, count in sorted(filter_counts.items(), key=lambda x: -x[1])[:5]:
+            print(f"  {filt}: {count:,} ({count/total:.1%})")

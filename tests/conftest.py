@@ -7,7 +7,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from fixtures.nf_core_datasets import TestDataManager
+from fixtures.nf_core_datasets import GIABDataManager
 from fixtures.vcf_generator import (
     SyntheticVariant,
     VCFGenerator,
@@ -32,9 +32,9 @@ def test_data_dir() -> Path:
 
 
 @pytest.fixture(scope="session")
-def test_data_manager() -> TestDataManager:
+def test_data_manager() -> GIABDataManager:
     """Manage test data downloads with caching."""
-    return TestDataManager()
+    return GIABDataManager()
 
 
 @pytest.fixture(scope="session")
@@ -214,4 +214,13 @@ def pytest_configure(config):
     )
     config.addinivalue_line(
         "markers", "validation: marks validation tests"
+    )
+    config.addinivalue_line(
+        "markers", "giab: marks tests requiring GIAB benchmark data"
+    )
+    config.addinivalue_line(
+        "markers", "giab_full: marks tests requiring full GIAB files (~4M variants each)"
+    )
+    config.addinivalue_line(
+        "markers", "benchmark: marks benchmark tests for performance measurement"
     )
