@@ -63,12 +63,26 @@ class TestNormalizeVariant:
         assert ref == "AT"
         assert alts == ["A", "ATC"]
 
-    def test_complex_indel(self):
-        """Test complex indel normalization - right-trims matching suffix until anchor needed."""
-        pos, ref, alts = normalize_variant("chr1", 100, "ATCGATCG", ["ATCG"])
-        assert pos == 100
-        assert ref == "ATCGA"
-        assert alts == ["A"]
+    def test_complex_indel_with_reference(self):
+        """Test complex indel normalization with reference genome.
+
+        ATCGATCG -> ATCG:
+        - Right-trim G: ATCGATC -> ATC
+        - Right-trim C: ATCGAT -> AT
+        - Right-trim T: ATCGA -> A
+        - Right-trim A: ATCG -> '' (empty), left-extend with G at pos 99
+        - Now GATCG -> G, both end in G, right-trim: GATC -> '' (empty)
+        - Left-extend with G at pos 98: GGATC -> G
+        - Now end differently (C vs G), done with phase 1
+        - Left-trim: both start with G, trim -> pos=99, GATC -> '' ... but alt is empty!
+        - Actually alt length is 1, so no left-trim
+        Final: pos=98, ref=GGATC, alt=G
+        """
+        ref_genome = MockReferenceGenome({"chr1:98-99": "G", "chr1:97-98": "G"})
+        pos, ref, alts = normalize_variant("chr1", 100, "ATCGATCG", ["ATCG"], ref_genome)
+        assert pos == 98
+        assert ref == "GGATC"
+        assert alts == ["G"]
 
     def test_complex_indel_no_trimming(self):
         """Test complex indel that cannot be trimmed."""
@@ -92,12 +106,17 @@ class TestNormalizeVariant:
         assert ref == "AT"
         assert alts == ["A"]
 
-    def test_deletion_preserves_anchor(self):
-        """Test that normalization stops before creating empty allele without reference."""
-        pos, ref, alts = normalize_variant("chr1", 100, "AA", ["A"])
-        assert pos == 100
-        assert ref == "AA"
-        assert alts == ["A"]
+    def test_deletion_with_reference(self):
+        """Test deletion normalization with reference genome.
+
+        AA -> A right-trims to A -> '' (empty), requiring left-extension.
+        With reference providing 'G' at position 99, we get pos=99, ref=GA, alt=G.
+        """
+        ref_genome = MockReferenceGenome({"chr1:98-99": "G"})
+        pos, ref, alts = normalize_variant("chr1", 100, "AA", ["A"], ref_genome)
+        assert pos == 99
+        assert ref == "GA"
+        assert alts == ["G"]
 
 
 class TestIsNormalized:
