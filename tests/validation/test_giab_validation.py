@@ -352,3 +352,291 @@ class TestCompoundHetDetection:
                     compound_het_genes.append(gene)
 
         assert "BRCA1" in compound_het_genes
+
+
+@pytest.mark.validation
+class TestSyntheticGIABValidation:
+    """Validation tests using synthetic data mimicking GIAB characteristics."""
+
+    @pytest.fixture
+    def synthetic_hg002_chr21(self):
+        """Generate synthetic chr21 variants mimicking HG002 characteristics."""
+        variants = []
+        for i in range(1000):
+            pos = 10000000 + (i * 1000)
+            if i % 10 < 8:
+                variants.append(SyntheticVariant(
+                    chrom="chr21",
+                    pos=pos,
+                    ref="A" if i % 2 == 0 else "C",
+                    alt=["G"] if i % 2 == 0 else ["T"],
+                    qual=30.0,
+                    info={"DP": 30 + (i % 20), "GQ": 99},
+                ))
+            else:
+                variants.append(SyntheticVariant(
+                    chrom="chr21",
+                    pos=pos,
+                    ref="ATG" if i % 2 == 0 else "GCAT",
+                    alt=["A"] if i % 2 == 0 else ["G"],
+                    qual=25.0,
+                    info={"DP": 25 + (i % 15), "GQ": 90},
+                ))
+
+        vcf_file = VCFGenerator.generate_file(variants)
+        yield vcf_file
+        vcf_file.unlink()
+
+    def test_synthetic_parsing_integrity(self, synthetic_hg002_chr21):
+        """Synthetic HG002 VCF parses without errors."""
+        from vcf_pg_loader.vcf_parser import VCFStreamingParser
+
+        parser = VCFStreamingParser(synthetic_hg002_chr21, human_genome=True)
+        try:
+            total = 0
+            errors = 0
+            for batch in parser.iter_batches():
+                for record in batch:
+                    total += 1
+                    if record.ref is None or record.alt is None:
+                        errors += 1
+
+            assert total == 1000, f"Expected 1000 variants, got {total}"
+            assert errors == 0, f"Found {errors} parsing errors"
+        finally:
+            parser.close()
+
+    def test_synthetic_variant_distribution(self, synthetic_hg002_chr21):
+        """Variant types match expected distribution."""
+        from vcf_pg_loader.vcf_parser import VCFStreamingParser
+
+        parser = VCFStreamingParser(synthetic_hg002_chr21, human_genome=True)
+        try:
+            snps = 0
+            indels = 0
+            for batch in parser.iter_batches():
+                for record in batch:
+                    if len(record.ref) == 1 and len(record.alt) == 1:
+                        snps += 1
+                    else:
+                        indels += 1
+
+            total = snps + indels
+            snp_ratio = snps / total if total > 0 else 0
+            assert 0.7 < snp_ratio < 0.9, f"SNP ratio {snp_ratio:.2f} outside expected range"
+            assert indels > 100, f"Expected >100 indels, got {indels}"
+        finally:
+            parser.close()
+
+    def test_synthetic_all_chr21(self, synthetic_hg002_chr21):
+        """All variants should be on chr21."""
+        from vcf_pg_loader.vcf_parser import VCFStreamingParser
+
+        parser = VCFStreamingParser(synthetic_hg002_chr21, human_genome=True)
+        try:
+            chromosomes = set()
+            for batch in parser.iter_batches():
+                for record in batch:
+                    chromosomes.add(record.chrom)
+
+            assert chromosomes == {"chr21"}, f"Unexpected chromosomes: {chromosomes}"
+        finally:
+            parser.close()
+
+    def test_synthetic_quality_scores(self, synthetic_hg002_chr21):
+        """Quality scores should be within expected ranges."""
+        from vcf_pg_loader.vcf_parser import VCFStreamingParser
+
+        parser = VCFStreamingParser(synthetic_hg002_chr21, human_genome=True)
+        try:
+            quals = []
+            for batch in parser.iter_batches():
+                for record in batch:
+                    if record.qual is not None:
+                        quals.append(record.qual)
+
+            assert len(quals) == 1000
+            assert min(quals) >= 20, f"Min qual {min(quals)} too low"
+            assert max(quals) <= 35, f"Max qual {max(quals)} too high"
+        finally:
+            parser.close()
+
+
+@pytest.mark.validation
+class TestVariantNormalizationValidation:
+    """Validate variant normalization against known cases."""
+
+    @pytest.fixture
+    def normalization_test_cases(self):
+        """Create variants with known normalization outcomes."""
+        variants = [
+            SyntheticVariant(chrom="chr1", pos=100, ref="ATG", alt=["AG"]),
+            SyntheticVariant(chrom="chr1", pos=200, ref="GATC", alt=["GTTC"]),
+            SyntheticVariant(chrom="chr1", pos=300, ref="CAA", alt=["CA"]),
+            SyntheticVariant(chrom="chr1", pos=400, ref="A", alt=["G"]),
+        ]
+        vcf_file = VCFGenerator.generate_file(variants)
+        yield vcf_file
+        vcf_file.unlink()
+
+    def test_normalization_applied(self, normalization_test_cases):
+        """Variants are normalized when flag is set."""
+        from vcf_pg_loader.vcf_parser import VCFStreamingParser
+
+        parser = VCFStreamingParser(normalization_test_cases, human_genome=True, normalize=True)
+        try:
+            normalized_count = 0
+            for batch in parser.iter_batches():
+                for record in batch:
+                    if record.normalized:
+                        normalized_count += 1
+
+            assert normalized_count >= 2, f"Expected at least 2 normalized variants, got {normalized_count}"
+        finally:
+            parser.close()
+
+    def test_original_coords_preserved(self, normalization_test_cases):
+        """Original coordinates are preserved after normalization."""
+        from vcf_pg_loader.vcf_parser import VCFStreamingParser
+
+        parser = VCFStreamingParser(normalization_test_cases, human_genome=True, normalize=True)
+        try:
+            for batch in parser.iter_batches():
+                for record in batch:
+                    if record.normalized:
+                        assert record.original_pos is not None
+                        assert record.original_ref is not None
+                        assert record.original_alt is not None
+        finally:
+            parser.close()
+
+    def test_original_snps_not_normalized(self, normalization_test_cases):
+        """Original SNPs (not resulting from normalization) should not be modified."""
+        from vcf_pg_loader.vcf_parser import VCFStreamingParser
+
+        parser = VCFStreamingParser(normalization_test_cases, human_genome=True, normalize=True)
+        try:
+            for batch in parser.iter_batches():
+                for record in batch:
+                    if record.pos == 400 and not record.normalized:
+                        assert record.ref == "A" and record.alt == "G"
+        finally:
+            parser.close()
+
+
+@pytest.mark.validation
+class TestClinicalVariantAccuracy:
+    """Validate accuracy for clinically relevant variants."""
+
+    @pytest.fixture
+    def clinical_variants(self):
+        """Create variants with clinical annotations."""
+        variants = [
+            SyntheticVariant(
+                chrom="chr17",
+                pos=43094464,
+                ref="C",
+                alt=["T"],
+                rs_id="rs80357906",
+                info={"CLNSIG": "Pathogenic", "SYMBOL": "BRCA1", "gnomAD_AF": 0.0001},
+            ),
+            SyntheticVariant(
+                chrom="chr13",
+                pos=32936732,
+                ref="C",
+                alt=["A"],
+                rs_id="rs80359550",
+                info={"CLNSIG": "Pathogenic", "SYMBOL": "BRCA2", "gnomAD_AF": 0.00005},
+            ),
+            SyntheticVariant(
+                chrom="chr7",
+                pos=55259515,
+                ref="T",
+                alt=["G"],
+                info={"CLNSIG": "Uncertain_significance", "SYMBOL": "EGFR", "gnomAD_AF": 0.001},
+            ),
+            SyntheticVariant(
+                chrom="chr1",
+                pos=100000,
+                ref="A",
+                alt=["G"],
+                info={"CLNSIG": "Benign", "gnomAD_AF": 0.15},
+            ),
+        ]
+        vcf_file = VCFGenerator.generate_file(variants)
+        yield vcf_file
+        vcf_file.unlink()
+
+    def test_clinvar_significance_extracted(self, clinical_variants):
+        """ClinVar significance is correctly extracted."""
+        from vcf_pg_loader.vcf_parser import VCFStreamingParser
+
+        parser = VCFStreamingParser(clinical_variants, human_genome=True)
+        try:
+            records = []
+            for batch in parser.iter_batches():
+                records.extend(batch)
+
+            pathogenic = [r for r in records if r.clinvar_sig == "Pathogenic"]
+            assert len(pathogenic) == 2, f"Expected 2 pathogenic, got {len(pathogenic)}"
+
+            vus = [r for r in records if r.clinvar_sig == "Uncertain_significance"]
+            assert len(vus) == 1, f"Expected 1 VUS, got {len(vus)}"
+
+            benign = [r for r in records if r.clinvar_sig == "Benign"]
+            assert len(benign) == 1, f"Expected 1 benign, got {len(benign)}"
+        finally:
+            parser.close()
+
+    def test_gnomad_frequency_extracted(self, clinical_variants):
+        """gnomAD allele frequency is correctly extracted."""
+        from vcf_pg_loader.vcf_parser import VCFStreamingParser
+
+        parser = VCFStreamingParser(clinical_variants, human_genome=True)
+        try:
+            records = []
+            for batch in parser.iter_batches():
+                records.extend(batch)
+
+            rare = [r for r in records if r.af_gnomad is not None and r.af_gnomad < 0.01]
+            common = [r for r in records if r.af_gnomad is not None and r.af_gnomad >= 0.01]
+
+            assert len(rare) == 3, f"Expected 3 rare variants, got {len(rare)}"
+            assert len(common) == 1, f"Expected 1 common variant, got {len(common)}"
+        finally:
+            parser.close()
+
+    def test_rs_id_preserved(self, clinical_variants):
+        """RS IDs are correctly preserved."""
+        from vcf_pg_loader.vcf_parser import VCFStreamingParser
+
+        parser = VCFStreamingParser(clinical_variants, human_genome=True)
+        try:
+            records = []
+            for batch in parser.iter_batches():
+                records.extend(batch)
+
+            with_rsid = [r for r in records if r.rs_id and r.rs_id.startswith("rs")]
+            assert len(with_rsid) == 2, f"Expected 2 variants with RS ID, got {len(with_rsid)}"
+            rs_ids = {r.rs_id for r in with_rsid}
+            assert "rs80357906" in rs_ids
+            assert "rs80359550" in rs_ids
+        finally:
+            parser.close()
+
+    def test_gene_symbols_extracted(self, clinical_variants):
+        """Gene symbols are correctly extracted."""
+        from vcf_pg_loader.vcf_parser import VCFStreamingParser
+
+        parser = VCFStreamingParser(clinical_variants, human_genome=True)
+        try:
+            records = []
+            for batch in parser.iter_batches():
+                records.extend(batch)
+
+            genes = {r.gene for r in records if r.gene}
+            assert "BRCA1" in genes
+            assert "BRCA2" in genes
+            assert "EGFR" in genes
+        finally:
+            parser.close()
