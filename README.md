@@ -17,37 +17,80 @@ High-performance VCF to PostgreSQL loader with clinical-grade compliance.
 - **Structured logging** - configurable verbosity levels
 - **Retry logic** - exponential backoff for transient database failures
 - **Docker support** - multi-stage Dockerfile and docker-compose for development
+- **Zero-config database** - auto-managed PostgreSQL via Docker, no setup required
 
 ## Installation
 
-```bash
-# Install with uv (recommended)
-uv pip install -e ".[dev]"
+### Quick Install (Recommended)
 
-# Or with pip
-pip install -e ".[dev]"
+```bash
+curl -fsSL https://raw.githubusercontent.com/Zacharyr41/vcf-pg-loader/main/install.sh | bash
+```
+
+This installs vcf-pg-loader and all dependencies (Python, Docker) automatically.
+
+### Manual Installation
+
+```bash
+# From PyPI (when published)
+pip install vcf-pg-loader
+
+# From TestPyPI (current)
+pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ vcf-pg-loader
+
+# For development
+git clone https://github.com/Zacharyr41/vcf-pg-loader.git
+cd vcf-pg-loader
+uv pip install -e ".[dev]"
+```
+
+### Verify Installation
+
+```bash
+vcf-pg-loader doctor
 ```
 
 ## Quick Start
 
+### Zero-Config Mode (Easiest)
+
+No PostgreSQL setup required - vcf-pg-loader manages a local database automatically:
+
 ```bash
-# Initialize database schema (human genome by default)
+# Load a VCF file (auto-starts PostgreSQL in Docker)
+vcf-pg-loader load sample.vcf.gz
+
+# Check database status
+vcf-pg-loader db status
+
+# Open psql shell to query data
+vcf-pg-loader db shell
+```
+
+### With Your Own PostgreSQL
+
+```bash
+# Initialize database schema
 vcf-pg-loader init-db --db postgresql://user:pass@localhost/variants
 
-# Initialize for non-human genomes (e.g., SARS-CoV-2, model organisms)
-vcf-pg-loader init-db --db postgresql://user:pass@localhost/variants --no-human-genome
-
-# Load a VCF file (normalizes variants by default)
+# Load a VCF file
 vcf-pg-loader load sample.vcf.gz --db postgresql://user:pass@localhost/variants
-
-# Load without normalization
-vcf-pg-loader load sample.vcf.gz --db postgresql://user:pass@localhost/variants --no-normalize
-
-# Load non-human VCF
-vcf-pg-loader load sarscov2.vcf.gz --db postgresql://user:pass@localhost/variants --no-human-genome
 
 # Validate a completed load
 vcf-pg-loader validate <load-batch-id> --db postgresql://user:pass@localhost/variants
+```
+
+### Additional Options
+
+```bash
+# Load without normalization
+vcf-pg-loader load sample.vcf.gz --no-normalize
+
+# Load non-human VCF (e.g., SARS-CoV-2)
+vcf-pg-loader load sarscov2.vcf.gz --no-human-genome
+
+# Initialize for non-human genomes
+vcf-pg-loader init-db --db postgresql://... --no-human-genome
 ```
 
 ## CLI Commands
@@ -60,7 +103,7 @@ Load a VCF file into PostgreSQL.
 vcf-pg-loader load <vcf_path> [OPTIONS]
 
 Options:
-  --db, -d                        PostgreSQL connection URL [default: postgresql://localhost/variants]
+  --db, -d                        PostgreSQL connection URL (omit for auto-managed DB)
   --batch, -b                     Records per batch [default: 50000]
   --workers, -w                   Parallel workers [default: 8]
   --normalize/--no-normalize      Normalize variants using vt algorithm [default: normalize]
@@ -72,6 +115,8 @@ Options:
   --progress/--no-progress        Show progress bar [default: progress]
   --force, -f                     Force reload even if file was already loaded
 ```
+
+When `--db` is omitted, vcf-pg-loader automatically uses a managed PostgreSQL container.
 
 **Normalization**: When enabled (default), variants are left-aligned and trimmed following the vt algorithm. This ensures consistent representation across different variant callers.
 
@@ -149,6 +194,35 @@ Benchmark Results (synthetic)
 Parsing: 100,000 variants in 0.94s (106,000/sec)
 ```
 
+### `doctor`
+
+Check system dependencies and diagnose issues.
+
+```bash
+vcf-pg-loader doctor
+
+# Example output:
+Dependency Check
+  Python         3.12.4   OK
+  cyvcf2         0.30.22  OK
+  asyncpg        0.29.0   OK
+  Docker         24.0.5   OK
+  Docker daemon  running  OK
+```
+
+### `db`
+
+Manage the local PostgreSQL database (Docker-based).
+
+```bash
+vcf-pg-loader db start   # Start PostgreSQL container
+vcf-pg-loader db stop    # Stop the container
+vcf-pg-loader db status  # Show running status and connection URL
+vcf-pg-loader db url     # Print connection URL (for scripts)
+vcf-pg-loader db shell   # Open psql shell
+vcf-pg-loader db reset   # Remove container and all data
+```
+
 ## Architecture
 
 ### Components
@@ -167,65 +241,6 @@ VCF File → VCFStreamingParser → Batch Buffer → asyncpg COPY → PostgreSQL
          VCFHeaderParser (field metadata)
                 ↓
          VariantParser (Number=A/R/G extraction)
-```
-
-## High-Level Architecture Plan
- ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        VCF File(s)                               │
-└────────────────────────────┬────────────────────────────────────┘
-                             │
-                             ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  Header Parser                                                   │
-│  - Extract INFO/FORMAT definitions for schema inference          │
-│  - Build contig name→index mapping                               │
-│  - Parse CSQ/ANN field structure from ##INFO lines               │
-└────────────────────────────┬────────────────────────────────────┘
-                             │
-              ┌──────────────┼──────────────┐
-              ▼              ▼              ▼
-┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐
-│  Worker 1        │ │  Worker 2        │ │  Worker N        │
-│  (chr1, chr4...) │ │  (chr2, chr5...) │ │  (chr3, chr6...) │
-│                  │ │                  │ │                  │
-│  ┌────────────┐  │ │  ┌────────────┐  │ │  ┌────────────┐  │
-│  │  cyvcf2    │  │ │  │  cyvcf2    │  │ │  │  cyvcf2    │  │
-│  │  Parser    │  │ │  │  Parser    │  │ │  │  Parser    │  │
-│  └─────┬──────┘  │ │  └─────┬──────┘  │ │  └─────┬──────┘  │
-│        │         │ │        │         │ │        │         │
-│  ┌─────▼──────┐  │ │  ┌─────▼──────┐  │ │  ┌─────▼──────┐  │
-│  │ Normalizer │  │ │  │ Normalizer │  │ │  │ Normalizer │  │
-│  └─────┬──────┘  │ │  └─────┬──────┘  │ │  └─────┬──────┘  │
-│        │         │ │        │         │ │        │         │
-│  ┌─────▼──────┐  │ │  ┌─────▼──────┐  │ │  ┌─────▼──────┐  │
-│  │  Batch     │  │ │  │  Batch     │  │ │  │  Batch     │  │
-│  │  Buffer    │  │ │  │  Buffer    │  │ │  │  Buffer    │  │
-│  │  (50K rows)│  │ │  │  (50K rows)│  │ │  │  (50K rows)│  │
-│  └─────┬──────┘  │ │  └─────┬──────┘  │ │  └─────┬──────┘  │
-└────────┼─────────┘ └────────┼─────────┘ └────────┼─────────┘
-         │                    │                    │
-         └────────────────────┼────────────────────┘
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  asyncpg Connection Pool (min=4, max=16)                        │
-│  Binary COPY protocol                                            │
-└────────────────────────────┬────────────────────────────────────┘
-                             │
-                             ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  PostgreSQL (indexes dropped during load)                        │
-│  - Partitioned by chromosome                                     │
-│  - Unlogged tables during bulk load (optional)                   │
-└────────────────────────────┬────────────────────────────────────┘
-                             │
-                             ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  Post-Load Phase                                                 │
-│  1. CREATE INDEX CONCURRENTLY (parallel per partition)           │
-│  2. VACUUM ANALYZE                                               │
-│  3. Validation: count verification, duplicate check              │
-└─────────────────────────────────────────────────────────────────┘
 ```
 
 ## Citations and Acknowledgments
@@ -326,10 +341,11 @@ uv run mypy src
 
 ## Documentation
 
+- [CLI Reference](docs/cli-reference.md) - Complete command-line documentation
 - [Genomics Concepts](docs/genomics-concepts.md) - Understanding VCF data for non-geneticists
 - [Glossary of Terms](docs/glossary-of-terms.md) - Technical terminology reference
 - [Architecture](docs/architecture.md) - Detailed system design and implementation
 
 ## License
 
-LGPL-2.1 - See [LICENSE](LICENSE) for details.
+MIT - See [LICENSE](LICENSE) for details.

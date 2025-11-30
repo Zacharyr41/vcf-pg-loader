@@ -39,14 +39,65 @@ def setup_logging(verbose: bool, quiet: bool) -> None:
     logging.getLogger("vcf_pg_loader").setLevel(level)
 
 
+def _resolve_database_url(db_url: str | None, quiet: bool) -> str | None:
+    """Resolve database URL, using managed database if needed.
+
+    Args:
+        db_url: User-provided URL, 'auto', or None.
+        quiet: Whether to suppress output.
+
+    Returns:
+        Resolved database URL, or None if failed.
+    """
+    from .managed_db import DockerNotAvailableError, ManagedDatabase
+    from .schema import SchemaManager
+
+    if db_url is not None and db_url.lower() != "auto":
+        return db_url
+
+    try:
+        db = ManagedDatabase()
+
+        if db.is_running():
+            url = db.get_url()
+            if not quiet:
+                console.print("[dim]Using managed database[/dim]")
+            return url
+
+        if not quiet:
+            console.print("Starting managed database...")
+
+        url = db.start()
+
+        if not quiet:
+            console.print("[green]✓[/green] Database started")
+
+        async def init_schema():
+            import asyncpg
+            conn = await asyncpg.connect(url)
+            try:
+                schema_manager = SchemaManager(human_genome=True)
+                await schema_manager.create_schema(conn)
+            finally:
+                await conn.close()
+
+        asyncio.run(init_schema())
+
+        return url
+
+    except DockerNotAvailableError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        console.print("\n[yellow]Tip:[/yellow] Provide a database URL with --db postgresql://...")
+        return None
+
+
 @app.command()
 def load(
     vcf_path: Path = typer.Argument(..., help="Path to VCF file (.vcf, .vcf.gz)"),
-    db_url: str = typer.Option(
-        "postgresql://localhost/variants",
+    db_url: Annotated[str | None, typer.Option(
         "--db", "-d",
-        help="PostgreSQL connection URL"
-    ),
+        help="PostgreSQL URL ('auto' for managed DB, omit to auto-detect)"
+    )] = None,
     batch_size: int = typer.Option(50000, "--batch", "-b", help="Records per batch"),
     workers: int = typer.Option(8, "--workers", "-w", help="Parallel workers"),
     normalize: bool = typer.Option(True, "--normalize/--no-normalize", help="Normalize variants"),
@@ -58,11 +109,19 @@ def load(
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
     progress: bool = typer.Option(True, "--progress/--no-progress", help="Show progress bar"),
 ) -> None:
-    """Load a VCF file into PostgreSQL."""
+    """Load a VCF file into PostgreSQL.
+
+    If --db is not specified, uses the managed database (auto-starts if needed).
+    Use --db auto to explicitly use managed database, or provide a PostgreSQL URL.
+    """
     setup_logging(verbose, quiet)
 
     if not vcf_path.exists():
         console.print(f"[red]Error: VCF file not found: {vcf_path}[/red]")
+        raise typer.Exit(1)
+
+    resolved_db_url = _resolve_database_url(db_url, quiet)
+    if resolved_db_url is None:
         raise typer.Exit(1)
 
     if config_file:
@@ -85,7 +144,7 @@ def load(
             log_level="DEBUG" if verbose else ("WARNING" if quiet else "INFO"),
         )
 
-    loader = VCFLoader(db_url, config)
+    loader = VCFLoader(resolved_db_url, config)
 
     try:
         if not quiet:
@@ -297,6 +356,206 @@ def benchmark(
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1) from None
+
+
+db_app = typer.Typer(help="Manage the local PostgreSQL database")
+app.add_typer(db_app, name="db")
+
+
+@db_app.command("start")
+def db_start(
+    port: int = typer.Option(5432, "--port", "-p", help="Port to expose PostgreSQL on"),
+) -> None:
+    """Start the managed PostgreSQL database.
+
+    Starts a Docker container running PostgreSQL. Data is persisted
+    between runs in a Docker volume.
+    """
+    from .managed_db import DockerNotAvailableError, ManagedDatabase
+
+    try:
+        db = ManagedDatabase()
+
+        if db.is_running():
+            console.print("[yellow]Database already running[/yellow]")
+            console.print(f"  URL: {db.get_url()}")
+            return
+
+        console.print("Starting managed database...")
+        url = db.start()
+        console.print("[green]✓[/green] Database started")
+        console.print(f"  URL: {url}")
+
+    except DockerNotAvailableError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@db_app.command("stop")
+def db_stop() -> None:
+    """Stop the managed PostgreSQL database.
+
+    Data is preserved and will be available when you start again.
+    """
+    from .managed_db import DockerNotAvailableError, ManagedDatabase
+
+    try:
+        db = ManagedDatabase()
+
+        if not db.is_running():
+            console.print("[yellow]Database is not running[/yellow]")
+            return
+
+        db.stop()
+        console.print("[green]✓[/green] Database stopped")
+
+    except DockerNotAvailableError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@db_app.command("status")
+def db_status() -> None:
+    """Show status of the managed database."""
+    from .managed_db import DockerNotAvailableError, ManagedDatabase
+
+    try:
+        db = ManagedDatabase()
+        status = db.status()
+
+        if status["running"]:
+            console.print("[green]●[/green] Database running")
+            console.print(f"  Container: {status['container_name']}")
+            console.print(f"  Image: {status['image']}")
+            console.print(f"  URL: {status['url']}")
+        else:
+            console.print("[dim]○[/dim] Database not running")
+            console.print("  Run 'vcf-pg-loader db start' to start")
+
+    except DockerNotAvailableError:
+        console.print("[red]○[/red] Docker not available")
+        console.print("  Install Docker to use managed database")
+
+
+@db_app.command("url")
+def db_url() -> None:
+    """Print the database connection URL.
+
+    Useful for scripting or connecting with other tools.
+    """
+    from .managed_db import DockerNotAvailableError, ManagedDatabase
+
+    try:
+        db = ManagedDatabase()
+        url = db.get_url()
+
+        if url:
+            console.print(url)
+        else:
+            console.print("[red]Database not running[/red]", err=True)
+            raise typer.Exit(1)
+
+    except DockerNotAvailableError as e:
+        console.print(f"[red]Error: {e}[/red]", err=True)
+        raise typer.Exit(1) from None
+
+
+@db_app.command("shell")
+def db_shell() -> None:
+    """Open a psql shell to the managed database."""
+    import subprocess
+
+    from .managed_db import (
+        CONTAINER_NAME,
+        DEFAULT_DATABASE,
+        DEFAULT_USER,
+        DockerNotAvailableError,
+        ManagedDatabase,
+    )
+
+    try:
+        db = ManagedDatabase()
+
+        if not db.is_running():
+            console.print("[red]Database not running. Run 'vcf-pg-loader db start' first.[/red]")
+            raise typer.Exit(1)
+
+        console.print(f"Connecting to {DEFAULT_DATABASE}...")
+        subprocess.run(
+            ["docker", "exec", "-it", CONTAINER_NAME, "psql", "-U", DEFAULT_USER, "-d", DEFAULT_DATABASE],
+            check=True,
+        )
+
+    except DockerNotAvailableError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    except subprocess.CalledProcessError:
+        raise typer.Exit(1) from None
+
+
+@db_app.command("reset")
+def db_reset(
+    force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt"),
+) -> None:
+    """Stop and remove the database including all data.
+
+    This is destructive and cannot be undone.
+    """
+    from .managed_db import DockerNotAvailableError, ManagedDatabase
+
+    if not force:
+        confirm = typer.confirm("This will delete all data. Are you sure?")
+        if not confirm:
+            console.print("Cancelled")
+            return
+
+    try:
+        db = ManagedDatabase()
+        db.reset()
+        console.print("[green]✓[/green] Database reset complete")
+
+    except DockerNotAvailableError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@app.command()
+def doctor() -> None:
+    """Check system dependencies and configuration.
+
+    Verifies that all required dependencies are installed and
+    provides installation instructions for any that are missing.
+    """
+    from .doctor import DependencyChecker
+
+    console.print("\n[bold]vcf-pg-loader System Check[/bold]")
+    console.print("─" * 30)
+
+    checker = DependencyChecker()
+    results = checker.check_all()
+
+    all_passed = True
+    for result in results:
+        if result.passed:
+            version_str = f" ({result.version})" if result.version else ""
+            console.print(f"[green]✓[/green] {result.name}{version_str}")
+        else:
+            all_passed = False
+            console.print(f"[red]✗[/red] {result.name}")
+            if result.message:
+                console.print(f"    {result.message}")
+
+    console.print()
+
+    if all_passed:
+        console.print("[green]All systems ready![/green]")
+    else:
+        console.print("[yellow]Some dependencies are missing.[/yellow]")
+        console.print("\nNote: Parsing and benchmarks work without Docker.")
+        console.print("      Database features require Docker or external PostgreSQL.")
 
 
 def main() -> None:

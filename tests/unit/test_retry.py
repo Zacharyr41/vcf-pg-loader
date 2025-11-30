@@ -152,12 +152,13 @@ class TestRetryAsync:
 
     @pytest.mark.asyncio
     async def test_max_delay_cap(self):
-        """Should cap delay at max_delay."""
+        """Should cap delay at max_delay (without jitter)."""
         config = RetryConfig(
             max_attempts=10,
             base_delay=1.0,
             exponential_base=10.0,
-            max_delay=2.0
+            max_delay=2.0,
+            jitter=False
         )
 
         delay = config.get_delay(5)
