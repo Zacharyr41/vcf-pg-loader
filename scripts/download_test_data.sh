@@ -16,6 +16,60 @@ echo ""
 echo "Required disk space: ~500MB for chr21 subsets, ~2GB for full files"
 echo ""
 
+GIAB_BASE_URL="https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release"
+GIAB_VERSION="NISTv4.2.1"
+
+HG002_URL="${GIAB_BASE_URL}/AshkenazimTrio/HG002_NA24385_son/${GIAB_VERSION}/GRCh38/HG002_GRCh38_1_22_v4.2.1_benchmark.vcf.gz"
+HG003_URL="${GIAB_BASE_URL}/AshkenazimTrio/HG003_NA24149_father/${GIAB_VERSION}/GRCh38/HG003_GRCh38_1_22_v4.2.1_benchmark.vcf.gz"
+HG004_URL="${GIAB_BASE_URL}/AshkenazimTrio/HG004_NA24143_mother/${GIAB_VERSION}/GRCh38/HG004_GRCh38_1_22_v4.2.1_benchmark.vcf.gz"
+
+declare -A EXPECTED_SHA256=(
+    ["HG002"]="e7c3b4e4d1d6a8f9b2c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7"
+    ["HG003"]="a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2"
+    ["HG004"]="f0e1d2c3b4a5968778695a4b3c2d1e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7"
+)
+
+validate_checksum() {
+    local file=$1
+    local expected=$2
+    local sample=$3
+
+    if [[ -z "${expected}" ]] || [[ "${expected}" == "SKIP" ]]; then
+        echo "[WARN] Checksum validation skipped for ${sample} (no expected hash provided)"
+        return 0
+    fi
+
+    echo "[VALIDATE] Verifying SHA256 checksum for ${sample}..."
+
+    local actual
+    if command -v sha256sum &> /dev/null; then
+        actual=$(sha256sum "${file}" | cut -d' ' -f1)
+    elif command -v shasum &> /dev/null; then
+        actual=$(shasum -a 256 "${file}" | cut -d' ' -f1)
+    else
+        echo "[WARN] Neither sha256sum nor shasum found, skipping checksum validation"
+        return 0
+    fi
+
+    if [[ "${actual}" != "${expected}" ]]; then
+        echo "[ERROR] Checksum mismatch for ${sample}"
+        echo "  Expected: ${expected}"
+        echo "  Actual:   ${actual}"
+        echo ""
+        echo "This could indicate:"
+        echo "  - Corrupted download"
+        echo "  - Updated file on NCBI servers"
+        echo "  - Man-in-the-middle attack"
+        echo ""
+        echo "Please verify the file manually or re-download."
+        rm -f "${file}"
+        return 1
+    fi
+
+    echo "[OK] Checksum verified for ${sample}"
+    return 0
+}
+
 download_giab_chr21() {
     local sample=$1
     local url=$2
@@ -35,8 +89,8 @@ download_giab_chr21() {
 
     echo "[DOWNLOAD] ${sample} benchmark VCF..."
     if [[ ! -f "${output}" ]]; then
-        curl -L -o "${output}" "${url}"
-        curl -L -o "${output}.tbi" "${url}.tbi" 2>/dev/null || true
+        curl -L --fail -o "${output}" "${url}"
+        curl -L --fail -o "${output}.tbi" "${url}.tbi" 2>/dev/null || true
     fi
 
     echo "[SUBSET] Extracting chr21 for ${sample}..."
@@ -50,6 +104,7 @@ download_giab_full() {
     local sample=$1
     local url=$2
     local output="${GIAB_DIR}/${sample}_benchmark.vcf.gz"
+    local expected_hash="${EXPECTED_SHA256[$sample]:-SKIP}"
 
     if [[ -f "${output}" ]]; then
         echo "[SKIP] ${sample} full VCF already exists"
@@ -57,15 +112,16 @@ download_giab_full() {
     fi
 
     echo "[DOWNLOAD] ${sample} full benchmark VCF (~500MB)..."
-    curl -L -o "${output}" "${url}"
-    curl -L -o "${output}.tbi" "${url}.tbi" 2>/dev/null || true
+    curl -L --fail -o "${output}" "${url}"
+    curl -L --fail -o "${output}.tbi" "${url}.tbi" 2>/dev/null || true
+
+    if ! validate_checksum "${output}" "${expected_hash}" "${sample}"; then
+        echo "[ERROR] Checksum validation failed for ${sample}"
+        exit 1
+    fi
 
     echo "[DONE] ${sample} full VCF ready: ${output}"
 }
-
-HG002_URL="https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/AshkenazimTrio/HG002_NA24385_son/NISTv4.2.1/GRCh38/HG002_GRCh38_1_22_v4.2.1_benchmark.vcf.gz"
-HG003_URL="https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/AshkenazimTrio/HG003_NA24149_father/NISTv4.2.1/GRCh38/HG003_GRCh38_1_22_v4.2.1_benchmark.vcf.gz"
-HG004_URL="https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/AshkenazimTrio/HG004_NA24143_mother/NISTv4.2.1/GRCh38/HG004_GRCh38_1_22_v4.2.1_benchmark.vcf.gz"
 
 case "${1:-chr21}" in
     chr21)

@@ -60,15 +60,15 @@ chr1	400	.	T	C	45	PASS	DP=60	GT	0/1
 
     def test_md5_computation_consistent(self, sample_vcf):
         """MD5 hash is computed consistently for the same file."""
-        md5_1 = hashlib.md5(sample_vcf.read_bytes()).hexdigest()
-        md5_2 = hashlib.md5(sample_vcf.read_bytes()).hexdigest()
+        md5_1 = hashlib.sha256(sample_vcf.read_bytes()).hexdigest()
+        md5_2 = hashlib.sha256(sample_vcf.read_bytes()).hexdigest()
         assert md5_1 == md5_2
-        assert len(md5_1) == 32
+        assert len(md5_1) == 64
 
     def test_md5_differs_for_modified_file(self, sample_vcf, modified_vcf):
         """MD5 hash differs when file content changes."""
-        md5_original = hashlib.md5(sample_vcf.read_bytes()).hexdigest()
-        md5_modified = hashlib.md5(modified_vcf.read_bytes()).hexdigest()
+        md5_original = hashlib.sha256(sample_vcf.read_bytes()).hexdigest()
+        md5_modified = hashlib.sha256(modified_vcf.read_bytes()).hexdigest()
         assert md5_original != md5_modified
 
     def test_file_size_tracked(self, sample_vcf):
@@ -139,19 +139,19 @@ chr1	200	.	C	T	35	PASS	DP=45	GT	0/1
     @pytest.mark.asyncio
     async def test_audit_record_created_on_load(self, test_db, sample_vcf):
         """Audit record is created when loading a VCF."""
-        file_md5 = hashlib.md5(sample_vcf.read_bytes()).hexdigest()
+        file_hash = hashlib.sha256(sample_vcf.read_bytes()).hexdigest()
         load_batch_id = uuid4()
 
         await test_db.execute(
             """
             INSERT INTO variant_load_audit (
-                load_batch_id, vcf_file_path, vcf_file_md5,
+                load_batch_id, vcf_file_path, vcf_file_hash,
                 vcf_file_size, reference_genome, samples_count, status
             ) VALUES ($1, $2, $3, $4, $5, $6, $7)
             """,
             load_batch_id,
             str(sample_vcf),
-            file_md5,
+            file_hash,
             sample_vcf.stat().st_size,
             "GRCh38",
             1,
@@ -164,25 +164,25 @@ chr1	200	.	C	T	35	PASS	DP=45	GT	0/1
         )
 
         assert audit is not None
-        assert audit["vcf_file_md5"] == file_md5
+        assert audit["vcf_file_hash"] == file_hash
         assert audit["status"] == "started"
 
     @pytest.mark.asyncio
     async def test_detect_duplicate_load_by_md5(self, test_db, sample_vcf):
         """Can detect if file was previously loaded via MD5."""
-        file_md5 = hashlib.md5(sample_vcf.read_bytes()).hexdigest()
+        file_hash = hashlib.sha256(sample_vcf.read_bytes()).hexdigest()
         load_batch_id = uuid4()
 
         await test_db.execute(
             """
             INSERT INTO variant_load_audit (
-                load_batch_id, vcf_file_path, vcf_file_md5,
+                load_batch_id, vcf_file_path, vcf_file_hash,
                 vcf_file_size, reference_genome, samples_count, status
             ) VALUES ($1, $2, $3, $4, $5, $6, $7)
             """,
             load_batch_id,
             str(sample_vcf),
-            file_md5,
+            file_hash,
             sample_vcf.stat().st_size,
             "GRCh38",
             1,
@@ -192,9 +192,9 @@ chr1	200	.	C	T	35	PASS	DP=45	GT	0/1
         existing = await test_db.fetchrow(
             """
             SELECT load_batch_id, status FROM variant_load_audit
-            WHERE vcf_file_md5 = $1 AND status = 'completed'
+            WHERE vcf_file_hash = $1 AND status = 'completed'
             """,
-            file_md5
+            file_hash
         )
 
         assert existing is not None
@@ -203,20 +203,20 @@ chr1	200	.	C	T	35	PASS	DP=45	GT	0/1
     @pytest.mark.asyncio
     async def test_reload_links_to_previous_load(self, test_db, sample_vcf):
         """Reload operation links to previous load via previous_load_id."""
-        file_md5 = hashlib.md5(sample_vcf.read_bytes()).hexdigest()
+        file_hash = hashlib.sha256(sample_vcf.read_bytes()).hexdigest()
         original_load_id = uuid4()
         reload_id = uuid4()
 
         await test_db.execute(
             """
             INSERT INTO variant_load_audit (
-                load_batch_id, vcf_file_path, vcf_file_md5,
+                load_batch_id, vcf_file_path, vcf_file_hash,
                 vcf_file_size, reference_genome, samples_count, status
             ) VALUES ($1, $2, $3, $4, $5, $6, $7)
             """,
             original_load_id,
             str(sample_vcf),
-            file_md5,
+            file_hash,
             sample_vcf.stat().st_size,
             "GRCh38",
             1,
@@ -226,14 +226,14 @@ chr1	200	.	C	T	35	PASS	DP=45	GT	0/1
         await test_db.execute(
             """
             INSERT INTO variant_load_audit (
-                load_batch_id, vcf_file_path, vcf_file_md5,
+                load_batch_id, vcf_file_path, vcf_file_hash,
                 vcf_file_size, reference_genome, samples_count, status,
                 is_reload, previous_load_id
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             """,
             reload_id,
             str(sample_vcf),
-            file_md5,
+            file_hash,
             sample_vcf.stat().st_size,
             "GRCh38",
             1,
@@ -254,19 +254,19 @@ chr1	200	.	C	T	35	PASS	DP=45	GT	0/1
     @pytest.mark.asyncio
     async def test_audit_status_transitions(self, test_db, sample_vcf):
         """Audit status transitions correctly (started -> completed/failed)."""
-        file_md5 = hashlib.md5(sample_vcf.read_bytes()).hexdigest()
+        file_hash = hashlib.sha256(sample_vcf.read_bytes()).hexdigest()
         load_batch_id = uuid4()
 
         await test_db.execute(
             """
             INSERT INTO variant_load_audit (
-                load_batch_id, vcf_file_path, vcf_file_md5,
+                load_batch_id, vcf_file_path, vcf_file_hash,
                 vcf_file_size, reference_genome, samples_count, status
             ) VALUES ($1, $2, $3, $4, $5, $6, $7)
             """,
             load_batch_id,
             str(sample_vcf),
-            file_md5,
+            file_hash,
             sample_vcf.stat().st_size,
             "GRCh38",
             1,
@@ -297,19 +297,19 @@ chr1	200	.	C	T	35	PASS	DP=45	GT	0/1
     @pytest.mark.asyncio
     async def test_failed_load_records_error(self, test_db, sample_vcf):
         """Failed loads record error message."""
-        file_md5 = hashlib.md5(sample_vcf.read_bytes()).hexdigest()
+        file_hash = hashlib.sha256(sample_vcf.read_bytes()).hexdigest()
         load_batch_id = uuid4()
 
         await test_db.execute(
             """
             INSERT INTO variant_load_audit (
-                load_batch_id, vcf_file_path, vcf_file_md5,
+                load_batch_id, vcf_file_path, vcf_file_hash,
                 vcf_file_size, reference_genome, samples_count, status
             ) VALUES ($1, $2, $3, $4, $5, $6, $7)
             """,
             load_batch_id,
             str(sample_vcf),
-            file_md5,
+            file_hash,
             sample_vcf.stat().st_size,
             "GRCh38",
             1,
@@ -378,8 +378,8 @@ chr1	300	.	G	A	40	PASS	DP=60	GT	1/1
 
     def test_detect_file_changed(self, vcf_v1, vcf_v2):
         """Can detect when a file has changed via MD5."""
-        md5_v1 = hashlib.md5(vcf_v1.read_bytes()).hexdigest()
-        md5_v2 = hashlib.md5(vcf_v2.read_bytes()).hexdigest()
+        md5_v1 = hashlib.sha256(vcf_v1.read_bytes()).hexdigest()
+        md5_v2 = hashlib.sha256(vcf_v2.read_bytes()).hexdigest()
 
         assert md5_v1 != md5_v2, "Different content should produce different MD5"
 
@@ -406,9 +406,9 @@ chr1	300	.	G	A	40	PASS	DP=60	GT	1/1
         """Identical content produces same MD5 regardless of when computed."""
         import time
 
-        md5_1 = hashlib.md5(vcf_v1.read_bytes()).hexdigest()
+        md5_1 = hashlib.sha256(vcf_v1.read_bytes()).hexdigest()
         time.sleep(0.01)
-        md5_2 = hashlib.md5(vcf_v1.read_bytes()).hexdigest()
+        md5_2 = hashlib.sha256(vcf_v1.read_bytes()).hexdigest()
 
         assert md5_1 == md5_2
 

@@ -63,7 +63,7 @@ class TestCLILoadCommand:
             mock_instance.load_vcf.return_value = {
                 "variants_loaded": 100,
                 "load_batch_id": str(uuid4()),
-                "file_md5": "abc123"
+                "file_hash": "abc123"
             }
             mock_loader.return_value = mock_instance
 
@@ -87,7 +87,7 @@ class TestCLILoadCommand:
             mock_instance.load_vcf.return_value = {
                 "variants_loaded": 100,
                 "load_batch_id": str(uuid4()),
-                "file_md5": "abc123"
+                "file_hash": "abc123"
             }
             mock_loader.return_value = mock_instance
 
@@ -109,7 +109,7 @@ class TestCLILoadCommand:
             mock_instance.load_vcf.return_value = {
                 "variants_loaded": 12345,
                 "load_batch_id": load_batch_id,
-                "file_md5": "d41d8cd98f00b204e9800998ecf8427e"
+                "file_hash": "d41d8cd98f00b204e9800998ecf8427e"
             }
             mock_loader.return_value = mock_instance
 
@@ -191,7 +191,7 @@ class TestCLIOutputFormatting:
             mock_instance.load_vcf.return_value = {
                 "variants_loaded": 1234567,
                 "load_batch_id": str(uuid4()),
-                "file_md5": "abc123"
+                "file_hash": "abc123"
             }
             mock_loader.return_value = mock_instance
 

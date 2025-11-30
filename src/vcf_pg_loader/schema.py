@@ -130,7 +130,7 @@ class SchemaManager:
                 audit_id BIGSERIAL PRIMARY KEY,
                 load_batch_id UUID NOT NULL UNIQUE,
                 vcf_file_path TEXT NOT NULL,
-                vcf_file_md5 CHAR(32) NOT NULL,
+                vcf_file_hash CHAR(64) NOT NULL,
                 vcf_file_size BIGINT,
 
                 -- Temporal tracking

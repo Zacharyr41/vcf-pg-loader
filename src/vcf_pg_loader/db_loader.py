@@ -120,31 +120,6 @@ def _variant_to_record(
 
 def _get_columns() -> list[str]:
     """Get column names for COPY operation."""
-    return [
-        "chrom",
-        "pos_range",
-        "pos",
-        "end_pos",
-        "ref",
-        "alt",
-        "qual",
-        "filter",
-        "rs_id",
-        "gene",
-        "transcript",
-        "hgvs_c",
-        "hgvs_p",
-        "consequence",
-        "impact",
-        "is_coding",
-        "is_lof",
-        "af_gnomad",
-        "af_gnomad_popmax",
-        "af_1kg",
-        "cadd_phred",
-        "clinvar_sig",
-        "clinvar_review",
-        "info",
-        "load_batch_id",
-        "sample_id",
-    ]
+    from .columns import VARIANT_COLUMNS
+
+    return VARIANT_COLUMNS

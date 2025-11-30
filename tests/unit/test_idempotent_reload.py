@@ -6,24 +6,24 @@ from pathlib import Path
 from uuid import uuid4
 
 
-class TestMD5Computation:
-    """Test MD5 hash computation for file identification."""
+class TestHashComputation:
+    """Test SHA256 hash computation for file identification."""
 
-    def test_md5_returns_32_char_hex_string(self):
-        """MD5 hash is a 32-character hexadecimal string."""
+    def test_sha256_returns_64_char_hex_string(self):
+        """SHA256 hash is a 64-character hexadecimal string."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".vcf", delete=False) as f:
             f.write("test content")
             path = Path(f.name)
 
         try:
-            md5 = hashlib.md5(path.read_bytes()).hexdigest()
-            assert len(md5) == 32
-            assert all(c in "0123456789abcdef" for c in md5)
+            sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+            assert len(sha256) == 64
+            assert all(c in "0123456789abcdef" for c in sha256)
         finally:
             path.unlink()
 
-    def test_md5_consistent_for_same_content(self):
-        """Same content always produces same MD5."""
+    def test_sha256_consistent_for_same_content(self):
+        """Same content always produces same SHA256."""
         content = "##fileformat=VCFv4.3\n#CHROM\tPOS\tID\tREF\tALT\n"
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".vcf", delete=False) as f:
@@ -35,15 +35,15 @@ class TestMD5Computation:
             path2 = Path(f.name)
 
         try:
-            md5_1 = hashlib.md5(path1.read_bytes()).hexdigest()
-            md5_2 = hashlib.md5(path2.read_bytes()).hexdigest()
-            assert md5_1 == md5_2
+            sha256_1 = hashlib.sha256(path1.read_bytes()).hexdigest()
+            sha256_2 = hashlib.sha256(path2.read_bytes()).hexdigest()
+            assert sha256_1 == sha256_2
         finally:
             path1.unlink()
             path2.unlink()
 
-    def test_md5_differs_for_different_content(self):
-        """Different content produces different MD5."""
+    def test_sha256_differs_for_different_content(self):
+        """Different content produces different SHA256."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".vcf", delete=False) as f:
             f.write("content A")
             path1 = Path(f.name)
@@ -53,15 +53,15 @@ class TestMD5Computation:
             path2 = Path(f.name)
 
         try:
-            md5_1 = hashlib.md5(path1.read_bytes()).hexdigest()
-            md5_2 = hashlib.md5(path2.read_bytes()).hexdigest()
-            assert md5_1 != md5_2
+            sha256_1 = hashlib.sha256(path1.read_bytes()).hexdigest()
+            sha256_2 = hashlib.sha256(path2.read_bytes()).hexdigest()
+            assert sha256_1 != sha256_2
         finally:
             path1.unlink()
             path2.unlink()
 
-    def test_md5_detects_single_byte_change(self):
-        """MD5 changes with even a single byte difference."""
+    def test_sha256_detects_single_byte_change(self):
+        """SHA256 changes with even a single byte difference."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".vcf", delete=False) as f:
             f.write("chr1\t100\t.\tA\tG\t30\tPASS")
             path1 = Path(f.name)
@@ -71,9 +71,9 @@ class TestMD5Computation:
             path2 = Path(f.name)
 
         try:
-            md5_1 = hashlib.md5(path1.read_bytes()).hexdigest()
-            md5_2 = hashlib.md5(path2.read_bytes()).hexdigest()
-            assert md5_1 != md5_2
+            sha256_1 = hashlib.sha256(path1.read_bytes()).hexdigest()
+            sha256_2 = hashlib.sha256(path2.read_bytes()).hexdigest()
+            assert sha256_1 != sha256_2
         finally:
             path1.unlink()
             path2.unlink()
@@ -141,8 +141,8 @@ class TestLoadBatchIdGeneration:
 class TestReloadDetection:
     """Test reload detection logic."""
 
-    def test_detect_same_file_by_md5(self):
-        """Same file is detected via MD5 match."""
+    def test_detect_same_file_by_sha256(self):
+        """Same file is detected via SHA256 match."""
         content = "##fileformat=VCFv4.3\nchr1\t100\t.\tA\tG\t30"
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".vcf", delete=False) as f:
@@ -150,29 +150,29 @@ class TestReloadDetection:
             path = Path(f.name)
 
         try:
-            md5_v1 = hashlib.md5(path.read_bytes()).hexdigest()
-            md5_v2 = hashlib.md5(path.read_bytes()).hexdigest()
+            sha256_v1 = hashlib.sha256(path.read_bytes()).hexdigest()
+            sha256_v2 = hashlib.sha256(path.read_bytes()).hexdigest()
 
-            is_same = md5_v1 == md5_v2
+            is_same = sha256_v1 == sha256_v2
             assert is_same is True
         finally:
             path.unlink()
 
-    def test_detect_modified_file_by_md5(self):
-        """Modified file is detected via MD5 mismatch."""
+    def test_detect_modified_file_by_sha256(self):
+        """Modified file is detected via SHA256 mismatch."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".vcf", delete=False) as f:
             f.write("version 1")
             path = Path(f.name)
 
         try:
-            md5_v1 = hashlib.md5(path.read_bytes()).hexdigest()
+            sha256_v1 = hashlib.sha256(path.read_bytes()).hexdigest()
 
             with open(path, "w") as f:
                 f.write("version 2")
 
-            md5_v2 = hashlib.md5(path.read_bytes()).hexdigest()
+            sha256_v2 = hashlib.sha256(path.read_bytes()).hexdigest()
 
-            is_same = md5_v1 == md5_v2
+            is_same = sha256_v1 == sha256_v2
             assert is_same is False
         finally:
             path.unlink()
@@ -188,13 +188,13 @@ class TestAuditRecordFields:
         for status in valid_statuses:
             assert status in valid_statuses
 
-    def test_md5_length_validation(self):
-        """MD5 must be exactly 32 characters."""
-        valid_md5 = "d41d8cd98f00b204e9800998ecf8427e"
-        assert len(valid_md5) == 32
+    def test_sha256_length_validation(self):
+        """SHA256 must be exactly 64 characters."""
+        valid_sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        assert len(valid_sha256) == 64
 
-        invalid_md5 = "too_short"
-        assert len(invalid_md5) != 32
+        invalid_sha256 = "too_short"
+        assert len(invalid_sha256) != 64
 
     def test_reference_genome_values(self):
         """Reference genome should be GRCh37 or GRCh38."""

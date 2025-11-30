@@ -55,12 +55,12 @@ def load(
         if result.get("skipped"):
             console.print("[yellow]⊘[/yellow] Skipped: file already loaded")
             console.print(f"  Previous Batch ID: {result['previous_load_id']}")
-            console.print(f"  File MD5: {result['file_md5']}")
+            console.print(f"  File SHA256: {result['file_hash']}")
             console.print("  Use --force to reload")
         else:
             console.print(f"[green]✓[/green] Loaded {result['variants_loaded']:,} variants")
             console.print(f"  Batch ID: {result['load_batch_id']}")
-            console.print(f"  File MD5: {result['file_md5']}")
+            console.print(f"  File SHA256: {result['file_hash']}")
 
     except ConnectionError as e:
         console.print(f"[red]Error: Database connection failed: {e}[/red]")

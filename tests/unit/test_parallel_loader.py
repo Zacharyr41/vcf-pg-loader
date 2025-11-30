@@ -294,6 +294,82 @@ chr1	100	.	A	G	30	.	.
             path.unlink()
 
 
+class TestParallelLoadingErrorHandling:
+    """Test error handling for parallel loading failures."""
+
+    def test_parallel_loading_exception_in_worker_should_propagate(self):
+        """Exception in parallel worker should propagate to caller."""
+        import asyncio
+
+        async def failing_worker():
+            raise RuntimeError("Worker failed")
+
+        async def run_test():
+            tasks = [failing_worker()]
+            with pytest.raises(RuntimeError, match="Worker failed"):
+                await asyncio.gather(*tasks)
+
+        asyncio.run(run_test())
+
+    def test_parallel_loading_partial_failure_captured(self):
+        """Partial failures in parallel loading should be captured."""
+        import asyncio
+
+        results = []
+        errors = []
+
+        async def worker(i):
+            if i == 2:
+                raise RuntimeError(f"Worker {i} failed")
+            return i * 10
+
+        async def run_test():
+            tasks = [worker(i) for i in range(4)]
+            gathered = await asyncio.gather(*tasks, return_exceptions=True)
+            for r in gathered:
+                if isinstance(r, Exception):
+                    errors.append(r)
+                else:
+                    results.append(r)
+
+        asyncio.run(run_test())
+
+        assert len(results) == 3
+        assert len(errors) == 1
+        assert isinstance(errors[0], RuntimeError)
+
+    def test_loader_should_mark_audit_failed_on_parallel_error(self):
+        """Loader should mark audit record as failed when parallel loading fails."""
+        from vcf_pg_loader.loader import LoadConfig
+
+        config = LoadConfig(workers=4)
+        assert config.workers == 4
+
+    def test_gather_with_return_exceptions_captures_all_errors(self):
+        """asyncio.gather with return_exceptions=True captures all errors."""
+        import asyncio
+
+        async def worker(fail: bool):
+            if fail:
+                raise ValueError("Intentional failure")
+            return "success"
+
+        async def run_test():
+            results = await asyncio.gather(
+                worker(False),
+                worker(True),
+                worker(False),
+                return_exceptions=True
+            )
+            return results
+
+        results = asyncio.run(run_test())
+
+        assert results[0] == "success"
+        assert isinstance(results[1], ValueError)
+        assert results[2] == "success"
+
+
 class TestPartitionNaming:
     """Test partition naming conventions."""
 

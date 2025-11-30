@@ -273,7 +273,7 @@ class TestVCFLoaderLoadVCF:
 
         assert result["variants_loaded"] == 4
         assert "load_batch_id" in result
-        assert "file_md5" in result
+        assert "file_hash" in result
 
         async with asyncpg.create_pool(db_url) as pool:
             async with pool.acquire() as conn:
@@ -316,7 +316,7 @@ class TestVCFLoaderLoadVCF:
                 assert audit is not None
                 assert audit["status"] == "completed"
                 assert audit["variants_loaded"] == 4
-                assert audit["vcf_file_md5"] == result["file_md5"]
+                assert audit["vcf_file_hash"] == result["file_hash"]
 
 
 @pytest.mark.integration
