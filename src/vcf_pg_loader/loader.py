@@ -5,11 +5,10 @@ import hashlib
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Literal, NotRequired, TypedDict
+from typing import Literal, NotRequired, TypedDict, TypeGuard
 from uuid import UUID, uuid4
 
 import asyncpg
-from asyncpg import Range
 
 from .models import VariantRecord
 from .schema import SchemaManager
@@ -36,6 +35,16 @@ class SkippedResult(TypedDict):
     reason: str
     previous_load_id: str
     file_hash: str
+
+
+def is_skipped_result(result: LoadResult | SkippedResult) -> TypeGuard[SkippedResult]:
+    """Type guard to narrow result to SkippedResult."""
+    return result.get("skipped") is True
+
+
+def is_load_result(result: LoadResult | SkippedResult) -> TypeGuard[LoadResult]:
+    """Type guard to narrow result to LoadResult."""
+    return "variants_loaded" in result
 
 
 class CheckExistingResult(TypedDict):
@@ -231,31 +240,9 @@ class VCFLoader:
         if not batch:
             return
 
-        records = [
-            (
-                r.chrom,
-                Range(r.pos, r.end_pos or r.pos + len(r.ref)),
-                r.pos,
-                r.end_pos,
-                r.ref,
-                r.alt,
-                r.qual,
-                r.filter if r.filter else None,
-                r.rs_id,
-                r.gene,
-                r.consequence,
-                r.impact,
-                r.hgvs_c,
-                r.hgvs_p,
-                r.af_gnomad,
-                r.cadd_phred,
-                r.clinvar_sig,
-                self.load_batch_id
-            )
-            for r in batch
-        ]
+        from .columns import VARIANT_COLUMNS_BASIC, get_record_values
 
-        from .columns import VARIANT_COLUMNS_BASIC
+        records = [get_record_values(r, self.load_batch_id) for r in batch]
 
         async with self.pool.acquire() as conn:
             await conn.copy_records_to_table(
@@ -332,6 +319,15 @@ class VCFLoader:
 
         Handles worker failures by rolling back partial loads and marking
         the audit record as failed.
+
+        WARNING: Memory Requirements
+            Parallel mode loads the entire VCF into memory before processing,
+            grouping variants by chromosome. Expect RAM usage of approximately
+            2x the uncompressed VCF file size. For large files (>1GB), consider
+            using sequential mode (parallel=False) or ensure sufficient RAM.
+
+            Example: A 500MB compressed VCF (~2GB uncompressed) may require
+            4GB+ of RAM in parallel mode.
         """
         chrom_batches: dict[str, list[VariantRecord]] = {}
         for batch in streaming_parser.iter_batches():

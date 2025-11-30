@@ -1,5 +1,11 @@
 """Single source of truth for variant column definitions."""
 
+from uuid import UUID
+
+from asyncpg import Range
+
+from .models import VariantRecord
+
 VARIANT_COLUMNS: list[str] = [
     "chrom",
     "pos_range",
@@ -49,3 +55,30 @@ VARIANT_COLUMNS_BASIC: list[str] = [
     "clinvar_sig",
     "load_batch_id",
 ]
+
+
+def get_record_values(record: VariantRecord, load_batch_id: UUID) -> tuple:
+    """Extract values from VariantRecord in VARIANT_COLUMNS_BASIC order.
+
+    This ensures column order and value order are always in sync.
+    """
+    return (
+        record.chrom,
+        Range(record.pos, record.end_pos or record.pos + len(record.ref)),
+        record.pos,
+        record.end_pos,
+        record.ref,
+        record.alt,
+        record.qual,
+        record.filter if record.filter else None,
+        record.rs_id,
+        record.gene,
+        record.consequence,
+        record.impact,
+        record.hgvs_c,
+        record.hgvs_p,
+        record.af_gnomad,
+        record.cadd_phred,
+        record.clinvar_sig,
+        load_batch_id,
+    )

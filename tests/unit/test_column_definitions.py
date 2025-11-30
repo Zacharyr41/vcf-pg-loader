@@ -1,6 +1,93 @@
 """Unit tests for column definition consistency."""
 
 
+
+class TestColumnRecordFieldMapping:
+    """Test that columns map correctly to VariantRecord fields."""
+
+    def test_basic_columns_match_record_tuple_order(self):
+        """VARIANT_COLUMNS_BASIC order matches VariantRecord field extraction order."""
+        from uuid import uuid4
+
+        from vcf_pg_loader.columns import VARIANT_COLUMNS_BASIC, get_record_values
+        from vcf_pg_loader.models import VariantRecord
+
+        record = VariantRecord(
+            chrom="chr1",
+            pos=100,
+            end_pos=101,
+            ref="A",
+            alt="G",
+            qual=30.0,
+            filter=["PASS"],
+            rs_id="rs123",
+            info={},
+            gene="BRCA1",
+            consequence="missense",
+            impact="MODERATE",
+            hgvs_c="c.123A>G",
+            hgvs_p="p.Lys41Arg",
+            af_gnomad=0.001,
+            cadd_phred=25.0,
+            clinvar_sig="Pathogenic",
+        )
+        load_batch_id = uuid4()
+
+        values = get_record_values(record, load_batch_id)
+        assert len(values) == len(VARIANT_COLUMNS_BASIC)
+
+    def test_get_record_values_returns_tuple(self):
+        """get_record_values returns a tuple for COPY protocol."""
+        from uuid import uuid4
+
+        from vcf_pg_loader.columns import get_record_values
+        from vcf_pg_loader.models import VariantRecord
+
+        record = VariantRecord(
+            chrom="chr1", pos=100, ref="A", alt="G",
+            qual=None, filter=[], rs_id=None, info={}
+        )
+        values = get_record_values(record, uuid4())
+        assert isinstance(values, tuple)
+
+    def test_get_record_values_includes_pos_range(self):
+        """get_record_values computes pos_range correctly."""
+        from uuid import uuid4
+
+        from vcf_pg_loader.columns import get_record_values
+        from vcf_pg_loader.models import VariantRecord
+
+        record = VariantRecord(
+            chrom="chr1", pos=100, end_pos=105, ref="ACGT", alt="A",
+            qual=None, filter=[], rs_id=None, info={}
+        )
+        values = get_record_values(record, uuid4())
+        assert values[1].lower == 100
+        assert values[1].upper == 105
+
+    def test_columns_and_values_align(self):
+        """Column names align with value positions."""
+        from uuid import uuid4
+
+        from vcf_pg_loader.columns import VARIANT_COLUMNS_BASIC, get_record_values
+        from vcf_pg_loader.models import VariantRecord
+
+        record = VariantRecord(
+            chrom="chr1", pos=100, ref="A", alt="G",
+            qual=None, filter=[], rs_id=None, info={}, gene="TP53"
+        )
+        batch_id = uuid4()
+        values = get_record_values(record, batch_id)
+
+        value_dict = dict(zip(VARIANT_COLUMNS_BASIC, values, strict=True))
+        assert value_dict["chrom"] == "chr1"
+        assert value_dict["pos"] == 100
+        assert value_dict["ref"] == "A"
+        assert value_dict["alt"] == "G"
+        assert value_dict["gene"] == "TP53"
+        assert value_dict["load_batch_id"] == batch_id
+
+
 class TestColumnDefinitionConsistency:
     """Test that column definitions are consistent across modules."""
 
