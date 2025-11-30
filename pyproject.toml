@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [
-    { name = "Your Name", email = "you@example.com" }
+    { name = "Zachary Rothstein", email = "zacharyr41@gmail.com" }
 ]
 keywords = ["vcf", "genomics", "postgresql", "bioinformatics", "variants"]
 classifiers = [
@@ -17,24 +17,20 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
-
 dependencies = [
-    # VCF Parsing
     "cyvcf2>=0.31.0",
-    
-    # Database
     "asyncpg>=0.29.0",
-    
-    # CLI
     "typer>=0.12.0",
     "rich>=13.7.0",
-    
-    # Data handling
     "pydantic>=2.6.0",
-    
-    # Async support
     "anyio>=4.3.0",
+    "docker>=7.0.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Zacharyr41/vcf-pg-loader"
+Repository = "https://github.com/Zacharyr41/vcf-pg-loader"
+Issues = "https://github.com/Zacharyr41/vcf-pg-loader/issues"
 
 [project.optional-dependencies]
 dev = [

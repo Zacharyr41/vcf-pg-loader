@@ -1,0 +1,31 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: vcfloader
+      POSTGRES_PASSWORD: vcfloader
+      POSTGRES_DB: variants
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vcfloader -d variants"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  vcf-pg-loader:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://vcfloader:vcfloader@postgres:5432/variants
+    volumes:
+      - ./data:/data:ro
+    entrypoint: ["vcf-pg-loader"]
+    command: ["--help"]
+
+volumes:
+  pgdata:

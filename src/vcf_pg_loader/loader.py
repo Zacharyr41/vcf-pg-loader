@@ -2,6 +2,8 @@
 
 import asyncio
 import hashlib
+import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -14,7 +16,11 @@ from .models import VariantRecord
 from .schema import SchemaManager
 from .vcf_parser import VCFStreamingParser
 
+logger = logging.getLogger(__name__)
+
 HASH_CHUNK_SIZE = 65536
+
+ProgressCallback = Callable[[int, int, int], None]
 
 
 class LoadResult(TypedDict):
@@ -88,20 +94,29 @@ class LoadConfig:
     drop_indexes: bool = True
     normalize: bool = True
     human_genome: bool = True
+    log_level: str = "INFO"
+    progress_callback: ProgressCallback | None = None
 
 
 class VCFLoader:
     """High-performance VCF to PostgreSQL loader using binary COPY."""
 
-    def __init__(self, db_url: str, config: LoadConfig | None = None):
+    def __init__(
+        self,
+        db_url: str,
+        config: LoadConfig | None = None,
+        logger: logging.Logger | None = None
+    ):
         self.db_url = db_url
         self.config = config or LoadConfig()
         self.pool: asyncpg.Pool | None = None
         self.load_batch_id: UUID = uuid4()
         self._schema_manager = SchemaManager(human_genome=self.config.human_genome)
+        self.logger = logger or logging.getLogger(__name__)
 
     async def connect(self) -> None:
         """Establish database connection pool."""
+        self.logger.debug("Establishing database connection pool")
         self.pool = await asyncpg.create_pool(
             self.db_url,
             min_size=4,
@@ -157,9 +172,14 @@ class VCFLoader:
     ) -> LoadResult | SkippedResult:
         """Load a VCF file into the database."""
         vcf_path = Path(vcf_path)
+        self.logger.info("Starting load of %s", vcf_path.name)
 
         if self.pool is None:
-            await self.connect()
+            try:
+                await self.connect()
+            except Exception as e:
+                self.logger.error("Failed to connect to database: %s", e)
+                raise
 
         file_hash = compute_file_hash(vcf_path)
 
@@ -209,15 +229,27 @@ class VCFLoader:
             if parallel and self.config.workers > 1:
                 total_loaded = await self._load_parallel(streaming_parser)
             else:
+                batch_num = 0
                 for batch in streaming_parser.iter_batches():
                     await self.copy_batch(batch)
                     total_loaded += len(batch)
+                    batch_num += 1
+                    self.logger.debug(
+                        "Batch %d: loaded %d variants (total: %d)",
+                        batch_num, len(batch), total_loaded
+                    )
+                    if self.config.progress_callback is not None:
+                        self.config.progress_callback(batch_num, len(batch), total_loaded)
 
             if self.config.drop_indexes:
                 async with self.pool.acquire() as conn:
                     await self._schema_manager.create_indexes(conn)
 
             await self._complete_audit(total_loaded)
+            self.logger.info(
+                "Completed load: %d variants loaded (batch_id=%s)",
+                total_loaded, self.load_batch_id
+            )
 
             result = {
                 "variants_loaded": total_loaded,
