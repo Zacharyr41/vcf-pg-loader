@@ -189,7 +189,7 @@ class TestVCFLoader:
             )
             assert row["gene"] == "TP53"
             assert row["consequence"] == "missense_variant"
-            assert row["impact_severity"] == "MODERATE"
+            assert row["impact"] == "MODERATE"
             assert row["hgvs_c"] == "c.743G>A"
             assert row["hgvs_p"] == "p.Arg248Gln"
             assert abs(row["af_gnomad"] - 0.00001) < 0.000001

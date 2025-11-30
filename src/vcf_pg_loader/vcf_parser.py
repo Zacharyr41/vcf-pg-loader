@@ -277,6 +277,13 @@ class VariantParser:
                 record.cadd_phred = self._safe_float(info_dict.get('CADD_PHRED'))
                 record.clinvar_sig = info_dict.get('CLNSIG')
 
+                if record.gene is None:
+                    record.gene = info_dict.get('SYMBOL')
+                if record.consequence is None:
+                    record.consequence = info_dict.get('Consequence')
+                if record.impact is None:
+                    record.impact = info_dict.get('IMPACT')
+
             records.append(record)
 
         return records

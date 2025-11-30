@@ -135,7 +135,7 @@ class VCFLoader:
                 columns=[
                     "chrom", "pos_range", "pos", "end_pos", "ref", "alt",
                     "qual", "filter", "rs_id", "gene", "consequence",
-                    "impact_severity", "hgvs_c", "hgvs_p", "af_gnomad",
+                    "impact", "hgvs_c", "hgvs_p", "af_gnomad",
                     "cadd_phred", "clinvar_sig", "load_batch_id"
                 ]
             )

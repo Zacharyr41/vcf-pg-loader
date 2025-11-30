@@ -18,11 +18,18 @@ class SchemaManager:
 
     async def create_schema(self, conn: asyncpg.Connection) -> None:
         """Create complete database schema."""
+        await self.drop_schema(conn)
         await self.create_extensions(conn)
         await self.create_types(conn)
         await self.create_variants_table(conn)
         await self.create_audit_table(conn)
         await self.create_samples_table(conn)
+
+    async def drop_schema(self, conn: asyncpg.Connection) -> None:
+        """Drop existing schema tables for clean recreation."""
+        await conn.execute("DROP TABLE IF EXISTS samples CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS variant_load_audit CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS variants CASCADE")
 
     async def create_extensions(self, conn: asyncpg.Connection) -> None:
         """Create required PostgreSQL extensions."""
@@ -71,7 +78,7 @@ class SchemaManager:
                 hgvs_c VARCHAR(255),
                 hgvs_p VARCHAR(255),
                 consequence VARCHAR(100),
-                impact_severity VARCHAR(20),
+                impact VARCHAR(20),
                 is_coding BOOLEAN DEFAULT FALSE,
                 is_lof BOOLEAN DEFAULT FALSE,
 
@@ -88,6 +95,9 @@ class SchemaManager:
                 -- Flexible storage for variable annotations
                 info JSONB DEFAULT '{{}}'::jsonb,
                 vep_annotations JSONB,
+
+                -- Sample tracking
+                sample_id VARCHAR(255),
 
                 -- Audit tracking
                 load_batch_id UUID NOT NULL,
@@ -175,7 +185,7 @@ class SchemaManager:
         await conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_variants_gene
             ON variants (gene)
-            INCLUDE (pos, ref, alt, impact_severity)
+            INCLUDE (pos, ref, alt, impact)
             WHERE gene IS NOT NULL
         """)
 

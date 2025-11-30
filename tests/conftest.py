@@ -54,7 +54,11 @@ async def test_db(postgres_container):
 
     from vcf_pg_loader.schema import SchemaManager
 
-    conn = await asyncpg.connect(postgres_container.get_connection_url())
+    url = postgres_container.get_connection_url()
+    if url.startswith("postgresql+psycopg2://"):
+        url = url.replace("postgresql+psycopg2://", "postgresql://")
+
+    conn = await asyncpg.connect(url)
 
     schema_manager = SchemaManager(human_genome=True)
     await schema_manager.create_schema(conn)
@@ -71,7 +75,11 @@ async def test_db_non_human(postgres_container):
 
     from vcf_pg_loader.schema import SchemaManager
 
-    conn = await asyncpg.connect(postgres_container.get_connection_url())
+    url = postgres_container.get_connection_url()
+    if url.startswith("postgresql+psycopg2://"):
+        url = url.replace("postgresql+psycopg2://", "postgresql://")
+
+    conn = await asyncpg.connect(url)
 
     schema_manager = SchemaManager(human_genome=False)
     await schema_manager.create_schema(conn)
@@ -200,4 +208,10 @@ def pytest_configure(config):
     )
     config.addinivalue_line(
         "markers", "nf_core: marks tests requiring nf-core test data"
+    )
+    config.addinivalue_line(
+        "markers", "performance: marks performance benchmark tests"
+    )
+    config.addinivalue_line(
+        "markers", "validation: marks validation tests"
     )
