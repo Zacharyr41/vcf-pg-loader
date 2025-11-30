@@ -148,6 +148,41 @@ class TestNumberGFields:
         assert genotype_index(1, 2) == 4
         assert genotype_index(2, 2) == 5
 
+    def test_pl_decomposition_concrete_example(self):
+        """
+        Concrete PL decomposition example from PR review.
+
+        For 3 alleles (REF + 2 ALTs), PL has 6 values in order:
+        Index 0: 0/0 (REF/REF)
+        Index 1: 0/1 (REF/ALT1)
+        Index 2: 1/1 (ALT1/ALT1)
+        Index 3: 0/2 (REF/ALT2)
+        Index 4: 1/2 (ALT1/ALT2)
+        Index 5: 2/2 (ALT2/ALT2)
+
+        Original: PL=100,50,30,40,20,10
+        Record 1 (ALT1): PL=[100,50,30] -> indices 0,1,2 (0/0, 0/1, 1/1)
+        Record 2 (ALT2): PL=[100,40,10] -> indices 0,3,5 (0/0, 0/2, 2/2)
+        """
+        original_pl = [100, 50, 30, 40, 20, 10]
+
+        def extract_pl_for_alt(pl_array: list[int], alt_idx: int) -> list[int]:
+            """Extract biallelic PL for specific ALT (0-indexed).
+
+            VCF genotype index formula: Index(a,b) = b*(b+1)/2 + a where a <= b
+            """
+            alt_allele = alt_idx + 1
+            idx_00 = 0
+            idx_0alt = (alt_allele * (alt_allele + 1)) // 2
+            idx_altalt = (alt_allele * (alt_allele + 1)) // 2 + alt_allele
+            return [pl_array[idx_00], pl_array[idx_0alt], pl_array[idx_altalt]]
+
+        record1_pl = extract_pl_for_alt(original_pl, 0)
+        assert record1_pl == [100, 50, 30]
+
+        record2_pl = extract_pl_for_alt(original_pl, 1)
+        assert record2_pl == [100, 40, 10]
+
 
 class TestFixedAndVariableNumbers:
     """Test fixed and variable Number specifications."""

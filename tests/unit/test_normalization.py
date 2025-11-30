@@ -128,3 +128,45 @@ class TestDecomposeMultiallelic:
         assert len(result) == 2
         assert ("chr1", 100, "A", "G") in result
         assert ("chr1", 100, "A", "T") in result
+
+
+class TestPosition1EdgeCase:
+    """Test position 1 edge case per VCF spec and Tan et al.
+
+    Per VCF spec: At position 1 (chromosome start), the variant must use
+    the base AFTER the event as context instead of the base before,
+    since there is no preceding base.
+    """
+
+    def test_insertion_at_position_1_no_ref(self):
+        """Insertion at position 1 without reference stays at position 1."""
+        pos, ref, alts = normalize_variant("chr1", 1, "A", ["AG"])
+        assert pos == 1
+        assert ref == "A"
+        assert alts == ["AG"]
+
+    def test_snp_at_position_1(self):
+        """SNP at position 1 is already normalized."""
+        pos, ref, alts = normalize_variant("chr1", 1, "A", ["G"])
+        assert pos == 1
+        assert ref == "A"
+        assert alts == ["G"]
+
+    def test_deletion_at_position_1_no_ref(self):
+        """Deletion at position 1 without reference stays at position 1."""
+        pos, ref, alts = normalize_variant("chr1", 1, "AG", ["A"])
+        assert pos == 1
+        assert ref == "AG"
+        assert alts == ["A"]
+
+    def test_complex_at_position_1(self):
+        """Complex variant at position 1 normalizes within bounds."""
+        pos, ref, alts = normalize_variant("chr1", 1, "ATG", ["ACG"])
+        assert pos == 2
+        assert ref == "T"
+        assert alts == ["C"]
+
+    def test_position_1_normalization_respects_boundary(self):
+        """Normalization at position 1 cannot go to position 0."""
+        pos, ref, alts = normalize_variant("chr1", 1, "AAA", ["AA"])
+        assert pos >= 1

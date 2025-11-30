@@ -79,6 +79,25 @@ class TestInfoFieldParsing:
 
         assert fields["TEST"]["Description"] == expected
 
+    def test_escaped_quotes_in_description(self):
+        """Descriptions with escaped quotes parse correctly per VCF spec."""
+        header = r'##INFO=<ID=TEST,Number=1,Type=String,Description="A \"quoted\" value">'
+        parser = VCFHeaderParser()
+        fields = parser.parse_info_fields([header])
+
+        assert "TEST" in fields
+        assert "quoted" in fields["TEST"]["Description"]
+
+    def test_description_with_parentheses_range(self):
+        """Descriptions with parenthetical ranges parse correctly (vcf2db edge case)."""
+        header = '##INFO=<ID=AF,Number=A,Type=Float,Description="Frequency in range (0,1]">'
+        parser = VCFHeaderParser()
+        fields = parser.parse_info_fields([header])
+
+        assert "AF" in fields
+        assert fields["AF"]["Number"] == "A"
+        assert "(0,1]" in fields["AF"]["Description"]
+
 
 class TestVEPCSQParsing:
     """Test VEP Consequence annotation field parsing."""
@@ -175,3 +194,44 @@ class TestEmptyAndMalformedHeaders:
 
         assert len(fields) == 1
         assert "DP" in fields
+
+
+class TestFlagFieldConstraints:
+    """Test VCF spec constraints for Flag type fields."""
+
+    def test_flag_must_have_number_zero(self):
+        """Flag type with Number=0 is valid per VCF spec."""
+        header = '##INFO=<ID=DB,Number=0,Type=Flag,Description="dbSNP member">'
+        parser = VCFHeaderParser()
+        fields = parser.parse_info_fields([header])
+
+        assert fields["DB"]["Number"] == "0"
+        assert fields["DB"]["Type"] == "Flag"
+
+    def test_flag_with_wrong_number_parsed(self):
+        """Flag type with Number!=0 is parsed (validation is caller responsibility)."""
+        header = '##INFO=<ID=BAD,Number=1,Type=Flag,Description="Invalid flag">'
+        parser = VCFHeaderParser()
+        fields = parser.parse_info_fields([header])
+
+        assert "BAD" in fields
+        assert fields["BAD"]["Number"] == "1"
+        assert fields["BAD"]["Type"] == "Flag"
+
+    def test_info_flag_is_valid(self):
+        """Flag type in INFO is valid per VCF spec."""
+        header = '##INFO=<ID=SOMATIC,Number=0,Type=Flag,Description="Somatic mutation">'
+        parser = VCFHeaderParser()
+        fields = parser.parse_info_fields([header])
+
+        assert "SOMATIC" in fields
+        assert fields["SOMATIC"]["Type"] == "Flag"
+
+    def test_format_flag_parsed(self):
+        """Flag type in FORMAT is parsed (spec says it's invalid but tools may produce it)."""
+        header = '##FORMAT=<ID=FT,Number=0,Type=Flag,Description="Invalid per spec">'
+        parser = VCFHeaderParser()
+        fields = parser.parse_format_fields([header])
+
+        assert "FT" in fields
+        assert fields["FT"]["Type"] == "Flag"
