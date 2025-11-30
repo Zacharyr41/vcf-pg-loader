@@ -224,6 +224,81 @@ def init_db(
         raise typer.Exit(1) from None
 
 
+@app.command()
+def benchmark(
+    vcf_path: Annotated[Path | None, typer.Option("--vcf", "-f", help="Path to VCF file")] = None,
+    synthetic: Annotated[int | None, typer.Option("--synthetic", "-s", help="Generate synthetic VCF with N variants")] = None,
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL (omit for parsing-only benchmark)")] = None,
+    batch_size: int = typer.Option(50000, "--batch", "-b", help="Records per batch"),
+    normalize: bool = typer.Option(True, "--normalize/--no-normalize", help="Normalize variants"),
+    human_genome: bool = typer.Option(True, "--human-genome/--no-human-genome", help="Use human chromosome enum type"),
+    json_output: bool = typer.Option(False, "--json", help="Output results as JSON"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Minimal output"),
+) -> None:
+    """Run performance benchmarks on VCF parsing and loading.
+
+    Examples:
+
+        # Quick benchmark with built-in fixture
+        vcf-pg-loader benchmark
+
+        # Generate and benchmark 100K synthetic variants
+        vcf-pg-loader benchmark --synthetic 100000
+
+        # Benchmark a specific VCF file
+        vcf-pg-loader benchmark --vcf sample.vcf.gz
+
+        # Full benchmark including database loading
+        vcf-pg-loader benchmark --synthetic 50000 --db postgresql://localhost/variants
+    """
+    import json
+
+    from .benchmark import run_benchmark
+
+    if vcf_path and not vcf_path.exists():
+        console.print(f"[red]Error: VCF file not found: {vcf_path}[/red]")
+        raise typer.Exit(1)
+
+    try:
+        result = run_benchmark(
+            vcf_path=vcf_path,
+            synthetic_count=synthetic,
+            db_url=db_url,
+            batch_size=batch_size,
+            normalize=normalize,
+            human_genome=human_genome,
+        )
+
+        if json_output:
+            console.print(json.dumps(result.to_dict(), indent=2))
+        else:
+            if not quiet:
+                source = "synthetic" if result.synthetic else Path(result.vcf_path).name
+                console.print(f"\n[bold]Benchmark Results[/bold] ({source})")
+                console.print(f"  Variants: {result.variant_count:,}")
+                console.print(f"  Batch size: {result.batch_size:,}")
+                console.print(f"  Normalized: {result.normalized}")
+                console.print()
+
+            console.print(
+                f"[cyan]Parsing:[/cyan] {result.variant_count:,} variants in "
+                f"{result.parsing_time:.2f}s ([green]{result.parsing_rate:,.0f}/sec[/green])"
+            )
+
+            if result.loading_time is not None:
+                console.print(
+                    f"[cyan]Loading:[/cyan] {result.variant_count:,} variants in "
+                    f"{result.loading_time:.2f}s ([green]{result.loading_rate:,.0f}/sec[/green])"
+                )
+
+    except FileNotFoundError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
 def main() -> None:
     """Entry point for the CLI."""
     app()

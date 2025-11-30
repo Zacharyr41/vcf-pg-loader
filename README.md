@@ -102,6 +102,53 @@ Options:
 
 **Important**: The genome type must match between `init-db` and `load` commands. Use `--no-human-genome` for both when loading non-human VCFs.
 
+### `benchmark`
+
+Run performance benchmarks on VCF parsing and loading.
+
+```bash
+vcf-pg-loader benchmark [OPTIONS]
+
+Options:
+  --vcf, -f        Path to VCF file (uses built-in fixture if omitted)
+  --synthetic, -s  Generate synthetic VCF with N variants
+  --db, -d         PostgreSQL URL (omit for parsing-only benchmark)
+  --batch, -b      Batch size [default: 50000]
+  --normalize/--no-normalize  Test with/without normalization
+  --json           Output results as JSON (for CI integration)
+  --quiet, -q      Minimal output
+```
+
+**Examples:**
+
+```bash
+# Quick benchmark with built-in fixture (~2.6K variants)
+vcf-pg-loader benchmark
+
+# Generate and benchmark 100K synthetic variants
+vcf-pg-loader benchmark --synthetic 100000
+
+# Benchmark a specific VCF file
+vcf-pg-loader benchmark --vcf /path/to/sample.vcf.gz
+
+# Full benchmark including database loading
+vcf-pg-loader benchmark --synthetic 50000 --db postgresql://localhost/variants
+
+# JSON output for CI/scripting
+vcf-pg-loader benchmark --synthetic 10000 --json
+```
+
+**Sample output:**
+
+```
+Benchmark Results (synthetic)
+  Variants: 100,000
+  Batch size: 50,000
+  Normalized: True
+
+Parsing: 100,000 variants in 0.94s (106,000/sec)
+```
+
 ## Architecture
 
 ### Components
