@@ -8,6 +8,7 @@ from pathlib import Path
 from cyvcf2 import VCF
 
 from .models import VariantRecord
+from .normalizer import normalize_variant
 
 
 def get_array_size(number_spec: str, n_alts: int, ploidy: int = 2) -> int:
@@ -203,8 +204,10 @@ class VCFHeaderParser:
 class VariantParser:
     """Parser for individual VCF variant records."""
 
-    def __init__(self, header_parser: VCFHeaderParser | None = None):
+    def __init__(self, header_parser: VCFHeaderParser | None = None, normalize: bool = False, human_genome: bool = True):
         self.header_parser = header_parser
+        self.normalize = normalize
+        self.human_genome = human_genome
 
     def parse_variant(self, variant, csq_fields: list[str]) -> list[VariantRecord]:
         """Parse a cyvcf2 variant into VariantRecord objects."""
@@ -217,16 +220,46 @@ class VariantParser:
 
             info_dict = self._extract_info_for_alt(variant, alt_idx, n_alts)
 
+            if self.human_genome:
+                chrom = f"chr{variant.CHROM.replace('chr', '')}"
+            else:
+                chrom = variant.CHROM
+            pos = variant.POS
+            ref = variant.REF
+            current_alt = alt
+
+            original_pos = None
+            original_ref = None
+            original_alt = None
+            was_normalized = False
+
+            if self.normalize:
+                norm_pos, norm_ref, norm_alts = normalize_variant(
+                    chrom, pos, ref, [current_alt]
+                )
+                if norm_pos != pos or norm_ref != ref or norm_alts[0] != current_alt:
+                    original_pos = pos
+                    original_ref = ref
+                    original_alt = current_alt
+                    pos = norm_pos
+                    ref = norm_ref
+                    current_alt = norm_alts[0]
+                    was_normalized = True
+
             record = VariantRecord(
-                chrom=f"chr{variant.CHROM.replace('chr', '')}",
-                pos=variant.POS,
+                chrom=chrom,
+                pos=pos,
                 end_pos=info_dict.get('END'),
-                ref=variant.REF,
-                alt=alt,
+                ref=ref,
+                alt=current_alt,
                 qual=variant.QUAL if variant.QUAL != -1 else None,
                 filter=variant.FILTER.split(';') if variant.FILTER and variant.FILTER != '.' else [],
                 rs_id=variant.ID if variant.ID != '.' else None,
-                info=info_dict
+                info=info_dict,
+                normalized=was_normalized,
+                original_pos=original_pos,
+                original_ref=original_ref,
+                original_alt=original_alt
             )
 
             if hasattr(variant, 'INFO') and 'CSQ' in variant.INFO and csq_fields:
@@ -355,9 +388,11 @@ class VCFStreamingParser:
 
     DEFAULT_BATCH_SIZE = 10000
 
-    def __init__(self, vcf_path: Path | str, batch_size: int | None = None):
+    def __init__(self, vcf_path: Path | str, batch_size: int | None = None, normalize: bool = False, human_genome: bool = True):
         self.vcf_path = Path(vcf_path) if isinstance(vcf_path, str) else vcf_path
         self.batch_size = batch_size if batch_size is not None else self.DEFAULT_BATCH_SIZE
+        self.normalize = normalize
+        self.human_genome = human_genome
 
         self._vcf: VCF | None = None
         self._closed = False
@@ -392,7 +427,7 @@ class VCFStreamingParser:
         if self._vcf is None:
             self._init_vcf()
 
-        variant_parser = VariantParser(self.header_parser)
+        variant_parser = VariantParser(self.header_parser, normalize=self.normalize, human_genome=self.human_genome)
         csq_fields = self.header_parser.csq_fields
 
         batch: list[VariantRecord] = []

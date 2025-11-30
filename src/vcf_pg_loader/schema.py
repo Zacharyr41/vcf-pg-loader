@@ -3,9 +3,18 @@
 
 import asyncpg
 
+HUMAN_CHROMOSOMES = [
+    'chr1', 'chr2', 'chr3', 'chr4', 'chr5', 'chr6', 'chr7', 'chr8', 'chr9',
+    'chr10', 'chr11', 'chr12', 'chr13', 'chr14', 'chr15', 'chr16', 'chr17',
+    'chr18', 'chr19', 'chr20', 'chr21', 'chr22', 'chrX', 'chrY', 'chrM'
+]
+
 
 class SchemaManager:
     """Manages PostgreSQL schema creation and maintenance."""
+
+    def __init__(self, human_genome: bool = True):
+        self.human_genome = human_genome
 
     async def create_schema(self, conn: asyncpg.Connection) -> None:
         """Create complete database schema."""
@@ -22,14 +31,28 @@ class SchemaManager:
 
     async def create_types(self, conn: asyncpg.Connection) -> None:
         """Create custom PostgreSQL types."""
-        pass
+        if self.human_genome:
+            enum_values = ", ".join(f"'{c}'" for c in HUMAN_CHROMOSOMES)
+            await conn.execute(f"""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'chromosome_type') THEN
+                        CREATE TYPE chromosome_type AS ENUM ({enum_values});
+                    END IF;
+                END$$
+            """)
 
     async def create_variants_table(self, conn: asyncpg.Connection) -> None:
         """Create the main variants table with partitioning."""
-        await conn.execute("""
+        if self.human_genome:
+            chrom_type = "chromosome_type"
+        else:
+            chrom_type = "TEXT"
+
+        await conn.execute(f"""
             CREATE TABLE variants (
                 variant_id BIGINT GENERATED ALWAYS AS IDENTITY,
-                chrom TEXT NOT NULL,
+                chrom {chrom_type} NOT NULL,
                 pos_range int8range NOT NULL,
                 pos BIGINT NOT NULL,
                 end_pos BIGINT,
@@ -63,7 +86,7 @@ class SchemaManager:
                 clinvar_review VARCHAR(50),
 
                 -- Flexible storage for variable annotations
-                info JSONB DEFAULT '{}',
+                info JSONB DEFAULT '{{}}'::jsonb,
                 vep_annotations JSONB,
 
                 -- Audit tracking
@@ -74,23 +97,21 @@ class SchemaManager:
             ) PARTITION BY LIST (chrom)
         """)
 
-        # Create partitions for each chromosome
-        chromosomes = [
-            'chr1', 'chr2', 'chr3', 'chr4', 'chr5', 'chr6', 'chr7', 'chr8', 'chr9',
-            'chr10', 'chr11', 'chr12', 'chr13', 'chr14', 'chr15', 'chr16', 'chr17',
-            'chr18', 'chr19', 'chr20', 'chr21', 'chr22', 'chrX', 'chrY', 'chrM'
-        ]
+        if self.human_genome:
+            for chrom in HUMAN_CHROMOSOMES:
+                partition_name = f"variants_{chrom.replace('chr', '').lower()}"
+                await conn.execute(f"""
+                    CREATE TABLE {partition_name} PARTITION OF variants
+                    FOR VALUES IN ('{chrom}')
+                """)
 
-        for chrom in chromosomes:
-            partition_name = f"variants_{chrom.replace('chr', '').lower()}"
-            await conn.execute(f"""
-                CREATE TABLE {partition_name} PARTITION OF variants
-                FOR VALUES IN ('{chrom}')
+            await conn.execute("""
+                CREATE TABLE variants_other PARTITION OF variants DEFAULT
             """)
-
-        await conn.execute("""
-            CREATE TABLE variants_other PARTITION OF variants DEFAULT
-        """)
+        else:
+            await conn.execute("""
+                CREATE TABLE variants_default PARTITION OF variants DEFAULT
+            """)
 
     async def create_audit_table(self, conn: asyncpg.Connection) -> None:
         """Create the audit trail table."""
@@ -146,13 +167,11 @@ class SchemaManager:
 
     async def create_indexes(self, conn: asyncpg.Connection) -> None:
         """Create performance indexes."""
-        # Region queries: GiST on int8range
         await conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_variants_region
             ON variants USING GiST (chrom, pos_range)
         """)
 
-        # Gene-based queries with covering columns
         await conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_variants_gene
             ON variants (gene)
@@ -160,14 +179,12 @@ class SchemaManager:
             WHERE gene IS NOT NULL
         """)
 
-        # rsID lookup
         await conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_variants_rsid
             ON variants USING HASH (rs_id)
             WHERE rs_id IS NOT NULL
         """)
 
-        # Clinical filtering
         await conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_variants_pathogenic
             ON variants (chrom, gene, clinvar_sig)
@@ -180,13 +197,11 @@ class SchemaManager:
             WHERE af_gnomad < 0.01 OR af_gnomad IS NULL
         """)
 
-        # JSONB for annotation search
         await conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_variants_info
             ON variants USING GIN (info jsonb_path_ops)
         """)
 
-        # Fuzzy HGVS search with trigrams
         await conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_variants_hgvsp_trgm
             ON variants USING GIN (hgvs_p gin_trgm_ops)

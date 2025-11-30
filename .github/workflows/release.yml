@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+jobs:
+  release:
+    if: github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'release')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get latest tag
+        id: get_tag
+        run: |
+          latest_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "latest_tag=$latest_tag" >> $GITHUB_OUTPUT
+
+      - name: Calculate next version
+        id: next_version
+        run: |
+          latest="${{ steps.get_tag.outputs.latest_tag }}"
+          # Remove 'v' prefix
+          version="${latest#v}"
+          # Split into major.minor.patch
+          IFS='.' read -r major minor patch <<< "$version"
+          # Increment minor version (for feature releases)
+          minor=$((minor + 1))
+          patch=0
+          next_version="v${major}.${minor}.${patch}"
+          echo "version=$next_version" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.next_version.outputs.version }}
+          name: ${{ steps.next_version.outputs.version }} - ${{ github.event.pull_request.title }}
+          body: |
+            ${{ github.event.pull_request.body }}
+
+            ---
+
+            **Full Changelog**: https://github.com/${{ github.repository }}/compare/${{ steps.get_tag.outputs.latest_tag }}...${{ steps.next_version.outputs.version }}
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -48,6 +48,33 @@ def initialized_db(db_url):
     return db_url
 
 
+@pytest.fixture(scope="class")
+def postgres_container_non_human():
+    """Provide a separate PostgreSQL container for non-human genome tests."""
+    with PostgresContainer("postgres:15") as postgres:
+        yield postgres
+
+
+@pytest.fixture(scope="class")
+def initialized_db_non_human(postgres_container_non_human):
+    """Initialize non-human genome database schema."""
+    host = postgres_container_non_human.get_container_host_ip()
+    port = postgres_container_non_human.get_exposed_port(5432)
+    user = postgres_container_non_human.username
+    password = postgres_container_non_human.password
+    database = postgres_container_non_human.dbname
+    db_url = f"postgresql://{user}:{password}@{host}:{port}/{database}"
+
+    result = subprocess.run(
+        ["uv", "run", "vcf-pg-loader", "init-db", "--db", db_url, "--no-human-genome"],
+        capture_output=True,
+        text=True,
+        timeout=60
+    )
+    assert result.returncode == 0, f"init-db failed: {result.stderr}"
+    return db_url
+
+
 @pytest.mark.integration
 class TestE2ECLI:
     """End-to-end CLI tests."""
@@ -327,15 +354,18 @@ class TestE2EDataIntegrity:
 class TestE2EAllFixtures:
     """E2E tests for all VCF fixture files."""
 
-    def _load_vcf_and_get_batch_id(self, vcf_path: Path, db_url: str) -> tuple[str, str]:
+    def _load_vcf_and_get_batch_id(self, vcf_path: Path, db_url: str, extra_args: list[str] | None = None) -> tuple[str, str]:
         """Helper to load a VCF and return (batch_id, stdout)."""
+        cmd = [
+            "uv", "run", "vcf-pg-loader", "load",
+            str(vcf_path),
+            "--db", db_url,
+            "--batch", "100"
+        ]
+        if extra_args:
+            cmd.extend(extra_args)
         result = subprocess.run(
-            [
-                "uv", "run", "vcf-pg-loader", "load",
-                str(vcf_path),
-                "--db", db_url,
-                "--batch", "100"
-            ],
+            cmd,
             capture_output=True,
             text=True,
             timeout=120
@@ -474,12 +504,12 @@ class TestE2EAllFixtures:
         import asyncio
         asyncio.run(verify())
 
-    def test_load_pacbio_repeats(self, initialized_db):
-        """Should load PacBio PBSV repeat annotations."""
+    def test_load_pacbio_repeats(self, initialized_db_non_human):
+        """Should load PacBio PBSV repeat annotations (non-standard chromosome)."""
         vcf_path = FIXTURES_DIR / "pacbio_repeats.vcf.gz"
-        db_url = initialized_db
+        db_url = initialized_db_non_human
 
-        result, batch_id = self._load_vcf_and_get_batch_id(vcf_path, db_url)
+        result, batch_id = self._load_vcf_and_get_batch_id(vcf_path, db_url, ["--no-human-genome"])
 
         assert result.returncode == 0, f"load failed: {result.stdout}"
 
@@ -497,12 +527,12 @@ class TestE2EAllFixtures:
         import asyncio
         asyncio.run(verify())
 
-    def test_load_sarscov2(self, initialized_db):
+    def test_load_sarscov2(self, initialized_db_non_human):
         """Should load non-human (SARS-CoV-2) VCF."""
         vcf_path = FIXTURES_DIR / "sarscov2.vcf.gz"
-        db_url = initialized_db
+        db_url = initialized_db_non_human
 
-        result, batch_id = self._load_vcf_and_get_batch_id(vcf_path, db_url)
+        result, batch_id = self._load_vcf_and_get_batch_id(vcf_path, db_url, ["--no-human-genome"])
 
         assert result.returncode == 0, f"load failed: {result.stdout}"
 
