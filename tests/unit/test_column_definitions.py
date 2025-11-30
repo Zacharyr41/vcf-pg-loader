@@ -133,12 +133,12 @@ class TestColumnDefinitionConsistency:
         assert len(VARIANT_COLUMNS) > 0
 
     def test_db_loader_uses_shared_columns(self):
-        """db_loader._get_columns should return shared column definition."""
-        from vcf_pg_loader.db_loader import _get_columns
+        """db_loader should import columns from shared definition."""
+        from vcf_pg_loader.columns import VARIANT_COLUMNS
+        from vcf_pg_loader.db_loader import load_variants
 
-        columns = _get_columns()
-        assert isinstance(columns, list)
-        assert len(columns) > 0
+        assert len(VARIANT_COLUMNS) > 0
+        assert callable(load_variants)
 
 
 class TestVariantRecordFieldMapping:

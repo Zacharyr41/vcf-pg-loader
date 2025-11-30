@@ -1,5 +1,6 @@
 """Single source of truth for variant column definitions."""
 
+import json
 from uuid import UUID
 
 from asyncpg import Range
@@ -81,4 +82,45 @@ def get_record_values(record: VariantRecord, load_batch_id: UUID) -> tuple:
         record.cadd_phred,
         record.clinvar_sig,
         load_batch_id,
+    )
+
+
+def get_record_values_full(
+    record: VariantRecord, load_batch_id: str, sample_id: str | None
+) -> tuple:
+    """Extract values from VariantRecord in VARIANT_COLUMNS order.
+
+    This ensures column order and value order are always in sync.
+    Includes all fields for full database schema.
+    """
+    end_pos = record.end_pos or record.pos + len(record.ref)
+    info_json = json.dumps(record.info) if record.info else "{}"
+
+    return (
+        record.chrom,
+        Range(record.pos, end_pos),
+        record.pos,
+        record.end_pos,
+        record.ref,
+        record.alt,
+        record.qual,
+        record.filter if record.filter else None,
+        record.rs_id,
+        record.gene,
+        record.transcript,
+        record.hgvs_c,
+        record.hgvs_p,
+        record.consequence,
+        record.impact,
+        record.is_coding,
+        record.is_lof,
+        record.af_gnomad,
+        record.af_gnomad_popmax,
+        record.af_1kg,
+        record.cadd_phred,
+        record.clinvar_sig,
+        record.clinvar_review,
+        info_json,
+        load_batch_id,
+        sample_id,
     )
