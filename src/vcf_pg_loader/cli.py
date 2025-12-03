@@ -291,6 +291,7 @@ def benchmark(
     batch_size: int = typer.Option(50000, "--batch", "-b", help="Records per batch"),
     normalize: bool = typer.Option(True, "--normalize/--no-normalize", help="Normalize variants"),
     human_genome: bool = typer.Option(True, "--human-genome/--no-human-genome", help="Use human chromosome enum type"),
+    realistic: bool = typer.Option(False, "--realistic", "-r", help="Generate realistic VCF with annotations and complex variants"),
     json_output: bool = typer.Option(False, "--json", help="Output results as JSON"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Minimal output"),
 ) -> None:
@@ -326,6 +327,7 @@ def benchmark(
             batch_size=batch_size,
             normalize=normalize,
             human_genome=human_genome,
+            realistic=realistic,
         )
 
         if json_output:

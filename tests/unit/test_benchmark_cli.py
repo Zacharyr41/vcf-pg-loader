@@ -1,5 +1,7 @@
 """Tests for benchmark CLI command and utilities."""
 
+import gzip
+import re
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -38,13 +40,160 @@ class TestGenerateSyntheticVCF:
 
     def test_vcf_has_valid_header(self):
         """Generated VCF should have a valid header."""
-        import gzip
-
         vcf_path = generate_synthetic_vcf(10)
         try:
             with gzip.open(vcf_path, "rt") as f:
                 first_line = f.readline()
                 assert first_line.startswith("##fileformat=VCF")
+        finally:
+            vcf_path.unlink()
+
+
+class TestRealisticSyntheticVCF:
+    """Tests for realistic synthetic VCF generation that mimics real variant callers."""
+
+    def test_has_snpeff_ann_field_in_header(self):
+        """Generated VCF should include SnpEff ANN field definition in header."""
+        vcf_path = generate_synthetic_vcf(100, realistic=True)
+        try:
+            with gzip.open(vcf_path, "rt") as f:
+                header = f.read()
+            assert "##INFO=<ID=ANN," in header
+            assert "Functional annotations" in header
+        finally:
+            vcf_path.unlink()
+
+    def test_has_multiple_info_fields_in_header(self):
+        """Generated VCF should have realistic INFO fields like real callers."""
+        vcf_path = generate_synthetic_vcf(100, realistic=True)
+        try:
+            with gzip.open(vcf_path, "rt") as f:
+                header = f.read()
+            required_fields = ["AC", "AN", "MQ", "QD", "FS", "SOR"]
+            for field in required_fields:
+                assert f"##INFO=<ID={field}," in header, f"Missing INFO field: {field}"
+        finally:
+            vcf_path.unlink()
+
+    def test_has_multiple_format_fields_in_header(self):
+        """Generated VCF should have realistic FORMAT fields."""
+        vcf_path = generate_synthetic_vcf(100, realistic=True)
+        try:
+            with gzip.open(vcf_path, "rt") as f:
+                header = f.read()
+            required_fields = ["GT", "DP", "AD", "GQ", "PL"]
+            for field in required_fields:
+                assert f"##FORMAT=<ID={field}," in header, f"Missing FORMAT field: {field}"
+        finally:
+            vcf_path.unlink()
+
+    def test_variants_have_annotations(self):
+        """At least some variants should have ANN annotations."""
+        vcf_path = generate_synthetic_vcf(100, realistic=True)
+        try:
+            with gzip.open(vcf_path, "rt") as f:
+                content = f.read()
+            variant_lines = [line for line in content.split("\n") if line and not line.startswith("#")]
+            ann_count = sum(1 for line in variant_lines if "ANN=" in line)
+            assert ann_count >= len(variant_lines) * 0.5, "At least 50% of variants should have ANN"
+        finally:
+            vcf_path.unlink()
+
+    def test_variants_have_realistic_info_fields(self):
+        """Variants should have multiple INFO fields like real data."""
+        vcf_path = generate_synthetic_vcf(100, realistic=True)
+        try:
+            with gzip.open(vcf_path, "rt") as f:
+                content = f.read()
+            variant_lines = [line for line in content.split("\n") if line and not line.startswith("#")]
+            for line in variant_lines[:10]:
+                fields = line.split("\t")
+                info = fields[7]
+                info_keys = [field.split("=")[0] for field in info.split(";") if "=" in field]
+                assert len(info_keys) >= 5, f"Expected at least 5 INFO fields, got {len(info_keys)}"
+        finally:
+            vcf_path.unlink()
+
+    def test_has_multiallelic_variants(self):
+        """Realistic VCF should include some multiallelic variants."""
+        vcf_path = generate_synthetic_vcf(500, realistic=True)
+        try:
+            with gzip.open(vcf_path, "rt") as f:
+                content = f.read()
+            variant_lines = [line for line in content.split("\n") if line and not line.startswith("#")]
+            multiallelic_count = sum(1 for line in variant_lines if "," in line.split("\t")[4])
+            assert multiallelic_count >= 10, f"Expected at least 10 multiallelic variants, got {multiallelic_count}"
+        finally:
+            vcf_path.unlink()
+
+    def test_has_realistic_indel_distribution(self):
+        """Should have a realistic mix of SNVs and indels (not just simple SNVs)."""
+        vcf_path = generate_synthetic_vcf(500, realistic=True)
+        try:
+            with gzip.open(vcf_path, "rt") as f:
+                content = f.read()
+            variant_lines = [line for line in content.split("\n") if line and not line.startswith("#")]
+            indel_count = 0
+            for line in variant_lines:
+                fields = line.split("\t")
+                ref, alt = fields[3], fields[4]
+                alts = alt.split(",")
+                if any(len(ref) != len(a) for a in alts):
+                    indel_count += 1
+            indel_pct = indel_count / len(variant_lines) * 100
+            assert 10 <= indel_pct <= 40, f"Indel percentage {indel_pct:.1f}% outside expected range 10-40%"
+        finally:
+            vcf_path.unlink()
+
+    def test_has_realistic_format_sample_data(self):
+        """Sample data should have realistic FORMAT fields (AD, GQ, PL)."""
+        vcf_path = generate_synthetic_vcf(100, realistic=True)
+        try:
+            with gzip.open(vcf_path, "rt") as f:
+                content = f.read()
+            variant_lines = [line for line in content.split("\n") if line and not line.startswith("#")]
+            for line in variant_lines[:10]:
+                fields = line.split("\t")
+                format_str = fields[8]
+                format_fields = format_str.split(":")
+                assert "GT" in format_fields
+                assert "AD" in format_fields, "Missing AD in FORMAT"
+                assert "GQ" in format_fields, "Missing GQ in FORMAT"
+        finally:
+            vcf_path.unlink()
+
+    def test_has_mix_of_filter_values(self):
+        """Should have both PASS and filtered variants like real data."""
+        vcf_path = generate_synthetic_vcf(500, realistic=True)
+        try:
+            with gzip.open(vcf_path, "rt") as f:
+                content = f.read()
+            variant_lines = [line for line in content.split("\n") if line and not line.startswith("#")]
+            pass_count = sum(1 for line in variant_lines if line.split("\t")[6] == "PASS")
+            filtered_count = len(variant_lines) - pass_count
+            assert pass_count > 0, "Should have some PASS variants"
+            assert filtered_count > 0, "Should have some filtered variants"
+        finally:
+            vcf_path.unlink()
+
+    def test_annotation_has_proper_format(self):
+        """ANN field should follow SnpEff format with pipe-separated values."""
+        vcf_path = generate_synthetic_vcf(100, realistic=True)
+        try:
+            with gzip.open(vcf_path, "rt") as f:
+                content = f.read()
+            variant_lines = [line for line in content.split("\n") if line and not line.startswith("#")]
+            ann_pattern = re.compile(r"ANN=([^;]+)")
+            found_valid_ann = False
+            for line in variant_lines:
+                match = ann_pattern.search(line)
+                if match:
+                    ann_value = match.group(1)
+                    parts = ann_value.split("|")
+                    assert len(parts) >= 10, f"ANN should have at least 10 pipe-separated fields, got {len(parts)}"
+                    found_valid_ann = True
+                    break
+            assert found_valid_ann, "Should find at least one valid ANN field"
         finally:
             vcf_path.unlink()
 
