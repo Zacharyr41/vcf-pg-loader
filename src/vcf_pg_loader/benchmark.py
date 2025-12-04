@@ -42,6 +42,21 @@ GENE_NAMES = [f"GENE{i}" for i in range(1, 501)]
 TRANSCRIPT_IDS = [f"ENST{str(i).zfill(11)}" for i in range(1, 1001)]
 GENE_IDS = [f"ENSG{str(i).zfill(11)}" for i in range(1, 501)]
 
+GIAB_PLATFORMS = ["PacBio", "Illumina", "10X", "CG", "Ion"]
+GIAB_DATASETS = [
+    "CCS15kb_20kb", "HiSeqPE300x", "10XChromiumLR", "HiSeq250x250",
+    "HiSeqMatePair", "CGnormal", "IonExome", "SolidSE75bp"
+]
+GIAB_CALLSETS = [
+    "CCS15kb_20kbGATK4", "HiSeqPE300xSentieon", "CCS15kb_20kbDV",
+    "10XLRGATK", "HiSeqPE300xfreebayes", "HiSeq250x250Sentieon",
+    "HiSeq250x250freebayes", "HiSeqMatePairfreebayes"
+]
+GIAB_DIFFICULT_REGIONS = [
+    "hg38.segdups_sorted_merged", "lowmappabilityall",
+    "AJtrio-HG002.hg38.300x.bam.bilkentuniv.072319.dups"
+]
+
 
 @dataclass
 class BenchmarkResult:
@@ -99,6 +114,70 @@ def _generate_snpeff_annotation(alt: str) -> str:
     aa_pos_field = f"{random.randint(1, 1000)}/{random.randint(1000, 2000)}"
 
     return f"{alt}|{consequence}|{impact}|{gene_name}|{gene_id}|transcript|{transcript_id}|{biotype}|{random.randint(1, 20)}/{random.randint(20, 30)}|{hgvs_c}|{hgvs_p}|{cdna_pos}|{cds_pos}|{aa_pos_field}||"
+
+
+def _generate_giab_info() -> str:
+    """Generate GIAB-style INFO field with platform/callset metadata."""
+    n_platforms = random.randint(1, 4)
+    platforms = random.sample(GIAB_PLATFORMS, n_platforms)
+    n_datasets = random.randint(1, 5)
+    datasets = random.sample(GIAB_DATASETS, min(n_datasets, len(GIAB_DATASETS)))
+    n_callsets = random.randint(1, 6)
+    callsets = random.sample(GIAB_CALLSETS, min(n_callsets, len(GIAB_CALLSETS)))
+    missing = random.sample(GIAB_DATASETS, random.randint(2, 5))
+    callable_cs = random.choice(callsets) if callsets else "CS_unknown"
+    filt_callsets = random.sample(GIAB_CALLSETS, random.randint(1, 4))
+    difficult = random.sample(GIAB_DIFFICULT_REGIONS, random.randint(1, 3))
+
+    info_parts = [
+        f"platforms={n_platforms}",
+        f"platformnames={','.join(platforms)}",
+        f"datasets={len(datasets)}",
+        f"datasetnames={','.join(datasets)}",
+        f"callsets={len(callsets)}",
+        f"callsetnames={','.join(callsets)}",
+        f"datasetsmissingcall={','.join(missing)}",
+        f"callable=CS_{callable_cs}_callable",
+        f"filt={','.join(f'CS_{c}_filt' for c in filt_callsets)}",
+        f"difficultregion={','.join(difficult)}",
+    ]
+    return ";".join(info_parts)
+
+
+def _generate_giab_variant(chrom: str, pos: int) -> str:
+    """Generate a GIAB-style variant line with realistic distributions.
+
+    Based on GIAB v4.2.1 HG002 chr21 statistics:
+    - 84% SNPs, 16% indels
+    - 57% het (0/1), 43% hom-alt (1/1), 0% hom-ref
+    - ~1% multiallelic
+    - Long INFO fields with platform/callset metadata
+    """
+    ref = random.choice(BASES)
+    alt = random.choice([b for b in BASES if b != ref])
+
+    rand = random.random()
+    if rand < 0.01:
+        alt2 = random.choice([b for b in BASES if b not in (ref, alt)])
+        alt = f"{alt},{alt2}"
+    elif rand < 0.16:
+        indel_len = random.randint(1, 15)
+        if random.random() < 0.5:
+            ref = ref + "".join(random.choices(BASES, k=indel_len))
+        else:
+            alt = alt + "".join(random.choices(BASES, k=indel_len))
+
+    info = _generate_giab_info()
+
+    gt = random.choices(["0/1", "1/1"], weights=[0.57, 0.43])[0]
+    dp = random.randint(30, 1000)
+    ref_reads = random.randint(0, dp) if gt == "0/1" else 0
+    alt_reads = dp - ref_reads
+    adall = f"{ref_reads},{alt_reads}"
+    ad = f"{ref_reads // 3},{alt_reads // 3}"
+    gq = random.randint(90, 400)
+
+    return f"{chrom}\t{pos}\t.\t{ref}\t{alt}\t50\tPASS\t{info}\tGT:PS:DP:ADALL:AD:GQ\t{gt}:.:{dp}:{adall}:{ad}:{gq}\n"
 
 
 def _generate_realistic_variant(chrom: str, pos: int) -> str:
@@ -250,11 +329,58 @@ REALISTIC_HEADER = """##fileformat=VCFv4.2
 #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE1
 """
 
+GIAB_HEADER = """##fileformat=VCFv4.2
+##FILTER=<ID=PASS,Description="All filters passed">
+##INFO=<ID=platforms,Number=1,Type=Integer,Description="Number of platforms with this call">
+##INFO=<ID=platformnames,Number=.,Type=String,Description="Names of platforms">
+##INFO=<ID=datasets,Number=1,Type=Integer,Description="Number of datasets with this call">
+##INFO=<ID=datasetnames,Number=.,Type=String,Description="Names of datasets">
+##INFO=<ID=callsets,Number=1,Type=Integer,Description="Number of callsets with this call">
+##INFO=<ID=callsetnames,Number=.,Type=String,Description="Names of callsets">
+##INFO=<ID=datasetsmissingcall,Number=.,Type=String,Description="Datasets missing this call">
+##INFO=<ID=callable,Number=.,Type=String,Description="Callsets with callable region">
+##INFO=<ID=filt,Number=.,Type=String,Description="Callsets with filtered call">
+##INFO=<ID=difficultregion,Number=.,Type=String,Description="Overlapping difficult regions">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##FORMAT=<ID=PS,Number=1,Type=Integer,Description="Phase set">
+##FORMAT=<ID=DP,Number=1,Type=Integer,Description="Read depth">
+##FORMAT=<ID=ADALL,Number=R,Type=Integer,Description="Allelic depths including filtered reads">
+##FORMAT=<ID=AD,Number=R,Type=Integer,Description="Allelic depths">
+##FORMAT=<ID=GQ,Number=1,Type=Integer,Description="Genotype quality">
+##contig=<ID=chr1,length=248956422>
+##contig=<ID=chr2,length=242193529>
+##contig=<ID=chr3,length=198295559>
+##contig=<ID=chr4,length=190214555>
+##contig=<ID=chr5,length=181538259>
+##contig=<ID=chr6,length=170805979>
+##contig=<ID=chr7,length=159345973>
+##contig=<ID=chr8,length=145138636>
+##contig=<ID=chr9,length=138394717>
+##contig=<ID=chr10,length=133797422>
+##contig=<ID=chr11,length=135086622>
+##contig=<ID=chr12,length=133275309>
+##contig=<ID=chr13,length=114364328>
+##contig=<ID=chr14,length=107043718>
+##contig=<ID=chr15,length=101991189>
+##contig=<ID=chr16,length=90338345>
+##contig=<ID=chr17,length=83257441>
+##contig=<ID=chr18,length=80373285>
+##contig=<ID=chr19,length=58617616>
+##contig=<ID=chr20,length=64444167>
+##contig=<ID=chr21,length=46709983>
+##contig=<ID=chr22,length=50818468>
+##contig=<ID=chrX,length=156040895>
+##contig=<ID=chrY,length=57227415>
+##contig=<ID=chrM,length=16569>
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tHG002
+"""
+
 
 def generate_synthetic_vcf(
     n_variants: int,
     output_path: Path | None = None,
     realistic: bool = False,
+    giab: bool = False,
 ) -> Path:
     """Generate a synthetic VCF file with the specified number of variants.
 
@@ -266,6 +392,8 @@ def generate_synthetic_vcf(
         output_path: Optional output path. If None, creates a temp file.
         realistic: If True, generate realistic VCF with annotations,
             multiple INFO/FORMAT fields, multiallelic sites, and varied filters.
+        giab: If True, generate GIAB-style VCF with platform/callset metadata
+            and distributions matching GIAB v4.2.1 benchmark data.
 
     Returns:
         Path to the generated VCF file.
@@ -276,7 +404,12 @@ def generate_synthetic_vcf(
     else:
         output_path = Path(output_path)
 
-    header = REALISTIC_HEADER if realistic else SIMPLE_HEADER
+    if giab:
+        header = GIAB_HEADER
+    elif realistic:
+        header = REALISTIC_HEADER
+    else:
+        header = SIMPLE_HEADER
 
     variants_per_chrom = n_variants // len(CHROMOSOMES)
     remainder = n_variants % len(CHROMOSOMES)
@@ -289,7 +422,9 @@ def generate_synthetic_vcf(
             positions = sorted(random.sample(range(10000, 100_000_000), min(count, 99_990_000)))
 
             for pos in positions:
-                if realistic:
+                if giab:
+                    line = _generate_giab_variant(chrom, pos)
+                elif realistic:
                     line = _generate_realistic_variant(chrom, pos)
                 else:
                     ref = random.choice(BASES)
@@ -397,6 +532,7 @@ def run_benchmark(
     normalize: bool = True,
     human_genome: bool = True,
     realistic: bool = False,
+    giab: bool = False,
 ) -> BenchmarkResult:
     """Run a complete benchmark.
 
@@ -409,6 +545,7 @@ def run_benchmark(
         normalize: Whether to normalize variants.
         human_genome: Whether to use human genome mode.
         realistic: If True, generate realistic VCF with annotations.
+        giab: If True, generate GIAB-style VCF with platform/callset metadata.
 
     Returns:
         BenchmarkResult with timing information.
@@ -417,7 +554,7 @@ def run_benchmark(
     cleanup_vcf = False
 
     if synthetic_count is not None:
-        vcf_path = generate_synthetic_vcf(synthetic_count, realistic=realistic)
+        vcf_path = generate_synthetic_vcf(synthetic_count, realistic=realistic, giab=giab)
         synthetic = True
         cleanup_vcf = True
     elif vcf_path is None:
