@@ -95,7 +95,7 @@ class TestAnnotationSchemaCreation:
             await schema_mgr.create_schema(conn)
             return conn
 
-        return asyncio.get_event_loop().run_until_complete(get_conn())
+        return asyncio.run(get_conn())
 
     def test_create_annotation_registry_table(self, db_conn):
         import asyncio
@@ -111,7 +111,7 @@ class TestAnnotationSchemaCreation:
             )
             assert result is True
 
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_create_annotation_source_table(self, db_conn, tmp_path):
         import asyncio
@@ -132,7 +132,7 @@ class TestAnnotationSchemaCreation:
             )
             assert result is True
 
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_annotation_table_has_variant_composite_key(self, db_conn, tmp_path):
         import asyncio
@@ -160,7 +160,7 @@ class TestAnnotationSchemaCreation:
             assert "ref" in col_names
             assert "alt" in col_names
 
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_annotation_table_has_lookup_index(self, db_conn, tmp_path):
         import asyncio
@@ -185,7 +185,7 @@ class TestAnnotationSchemaCreation:
 
             assert any("lookup" in name for name in index_names)
 
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
 
 @pytest.mark.integration
@@ -206,7 +206,7 @@ class TestAnnotationLoading:
             await schema_mgr.create_schema(conn)
             return conn
 
-        return asyncio.get_event_loop().run_until_complete(get_conn())
+        return asyncio.run(get_conn())
 
     def test_load_gnomad_vcf_as_annotation_source(self, db_conn, tmp_path):
         import asyncio
@@ -232,7 +232,7 @@ class TestAnnotationLoading:
 
             assert result["variants_loaded"] == 100
 
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_load_multiple_annotation_sources(self, db_conn, tmp_path):
         import asyncio
@@ -281,7 +281,7 @@ class TestAnnotationLoading:
             assert "gnomad_multi" in source_names
             assert "clinvar_multi" in source_names
 
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_annotation_source_tracks_version(self, db_conn, tmp_path):
         import asyncio
@@ -313,7 +313,7 @@ class TestAnnotationLoading:
             )
             assert row["version"] == "v3.1.2"
 
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
 
 @pytest.mark.integration
@@ -365,7 +365,7 @@ class TestAnnotationLookup:
 
             return conn
 
-        conn = asyncio.get_event_loop().run_until_complete(setup())
+        conn = asyncio.run(setup())
         yield {
             "conn": conn,
             "n_shared": 100,
@@ -388,7 +388,7 @@ class TestAnnotationLookup:
             annotated = [r for r in results if r.get("gnomad_af") is not None]
             assert len(annotated) == db_with_annotations["n_shared"]
 
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_annotate_returns_null_for_novel_variants(self, db_with_annotations):
         import asyncio
@@ -406,7 +406,7 @@ class TestAnnotationLookup:
             novel = [r for r in results if r.get("gnomad_af") is None]
             assert len(novel) == db_with_annotations["n_query_only"]
 
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_annotate_with_expression_filter(self, db_with_annotations):
         import asyncio
@@ -426,7 +426,7 @@ class TestAnnotationLookup:
                 if r.get("gnomad_af") is not None:
                     assert r["gnomad_af"] < 0.01
 
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_annotate_with_missing_value_filter(self, db_with_annotations):
         import asyncio
@@ -445,7 +445,7 @@ class TestAnnotationLookup:
             total_expected = db_with_annotations["n_shared"] + db_with_annotations["n_query_only"]
             assert len(results) <= total_expected
 
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
 
 @pytest.mark.integration
@@ -466,7 +466,7 @@ class TestAnnotationChrPrefixHandling:
             await schema_mgr.create_schema(conn)
             return conn
 
-        return asyncio.get_event_loop().run_until_complete(get_conn())
+        return asyncio.run(get_conn())
 
     def test_annotate_handles_chr_prefix_mismatch(self, db_conn, tmp_path):
         import asyncio
@@ -496,7 +496,7 @@ class TestAnnotationChrPrefixHandling:
             annotator = VariantAnnotator(db_conn)
             annotator.normalize_chr_prefix = True
 
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
 
 class TestExpressionParser:
@@ -639,7 +639,7 @@ class TestAnnotationPerformance:
             conn = await asyncpg.connect(db_url)
             return {"conn": conn, "batch_id": str(load_result["load_batch_id"]), "n_variants": n_variants}
 
-        return asyncio.get_event_loop().run_until_complete(setup())
+        return asyncio.run(setup())
 
     def test_annotation_lookup_performance(self, benchmark_db):
         """Benchmark: annotation lookup should process >100K variants/sec."""
@@ -669,7 +669,7 @@ class TestAnnotationPerformance:
             assert annotated == n_variants
             assert rate > 50000
 
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_annotation_load_performance(self, postgres_container, tmp_path):
         """Benchmark: annotation DB loading should process >50K variants/sec."""
@@ -714,7 +714,7 @@ class TestAnnotationPerformance:
 
             await conn.close()
 
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_filtered_annotation_performance(self, benchmark_db):
         """Benchmark: filtered annotation lookup with expression."""
@@ -740,4 +740,4 @@ class TestAnnotationPerformance:
                 if r.get("gnomad_af") is not None:
                     assert r["gnomad_af"] < 0.01
 
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
