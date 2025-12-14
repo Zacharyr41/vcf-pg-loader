@@ -11,7 +11,12 @@ import typer
 from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
 
+from .annotation_config import load_field_config
+from .annotation_loader import AnnotationLoader
+from .annotation_schema import AnnotationSchemaManager
+from .annotator import VariantAnnotator
 from .config import load_config
+from .expression import FilterExpressionParser
 from .loader import LoadConfig, VCFLoader
 from .schema import SchemaManager
 
@@ -360,6 +365,250 @@ def benchmark(
     except FileNotFoundError as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1) from None
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@app.command("load-annotation")
+def load_annotation(
+    vcf_path: Path = typer.Argument(..., help="Path to annotation VCF file (.vcf, .vcf.gz)"),
+    name: Annotated[str | None, typer.Option("--name", "-n", help="Name for this annotation source")] = None,
+    config_file: Annotated[Path | None, typer.Option("--config", "-c", help="JSON field configuration file")] = None,
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    version: Annotated[str | None, typer.Option("--version", "-v", help="Version string for this source")] = None,
+    source_type: Annotated[str | None, typer.Option("--type", "-t", help="Source type (population, pathogenicity, etc.)")] = None,
+    human_genome: bool = typer.Option(True, "--human-genome/--no-human-genome", help="Use human chromosome enum type"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Load an annotation VCF file as a reference database.
+
+    The annotation source can then be used to annotate query VCFs via SQL JOINs.
+
+    Example:
+        vcf-pg-loader load-annotation gnomad.vcf.gz --name gnomad_v3 --config gnomad.json
+    """
+    if not vcf_path.exists():
+        console.print(f"[red]Error: VCF file not found: {vcf_path}[/red]")
+        raise typer.Exit(1)
+
+    if name is None:
+        console.print("[red]Error: --name is required[/red]")
+        raise typer.Exit(1)
+
+    if config_file is None:
+        console.print("[red]Error: --config is required[/red]")
+        raise typer.Exit(1)
+
+    if not config_file.exists():
+        console.print(f"[red]Error: Config file not found: {config_file}[/red]")
+        raise typer.Exit(1)
+
+    resolved_db_url = _resolve_database_url(db_url, quiet)
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    try:
+        field_config = load_field_config(config_file)
+    except Exception as e:
+        console.print(f"[red]Error loading config: {e}[/red]")
+        raise typer.Exit(1) from None
+
+    async def run_load() -> dict:
+        conn = await asyncpg.connect(resolved_db_url)
+        try:
+            schema_manager = SchemaManager(human_genome=human_genome)
+            await schema_manager.create_schema(conn)
+
+            loader = AnnotationLoader(human_genome=human_genome)
+            result = await loader.load_annotation_source(
+                vcf_path=vcf_path,
+                source_name=name,
+                field_config=field_config,
+                conn=conn,
+                version=version,
+                source_type=source_type,
+            )
+            return result
+        finally:
+            await conn.close()
+
+    try:
+        result = asyncio.run(run_load())
+        if not quiet:
+            console.print(f"[green]✓[/green] Loaded {result['variants_loaded']:,} variants")
+            console.print(f"  Source: {result['source_name']}")
+            console.print(f"  Table: {result['table_name']}")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@app.command("list-annotations")
+def list_annotations(
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """List all loaded annotation sources."""
+    import json
+
+    resolved_db_url = _resolve_database_url(db_url, quiet)
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_list() -> list:
+        conn = await asyncpg.connect(resolved_db_url)
+        try:
+            schema_manager = AnnotationSchemaManager()
+
+            await schema_manager.create_annotation_registry(conn)
+
+            sources = await schema_manager.list_sources(conn)
+            return sources
+        finally:
+            await conn.close()
+
+    try:
+        sources = asyncio.run(run_list())
+
+        if json_output:
+            console.print(json.dumps([dict(s) for s in sources], indent=2, default=str))
+        elif sources:
+            for source in sources:
+                console.print(f"[cyan]{source['name']}[/cyan]")
+                if source.get('version'):
+                    console.print(f"  Version: {source['version']}")
+                if source.get('source_type'):
+                    console.print(f"  Type: {source['source_type']}")
+                console.print(f"  Variants: {source.get('variant_count', 0):,}")
+                console.print()
+        else:
+            if not quiet:
+                console.print("[dim]No annotation sources loaded[/dim]")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@app.command("annotate")
+def annotate(
+    batch_id: str = typer.Argument(..., help="Load batch ID of variants to annotate"),
+    source: Annotated[list[str] | None, typer.Option("--source", "-s", help="Annotation source(s) to use")] = None,
+    filter_expr: Annotated[str | None, typer.Option("--filter", "-f", help="Filter expression (echtvar-style)")] = None,
+    output: Annotated[Path | None, typer.Option("--output", "-o", help="Output file path")] = None,
+    format: Annotated[str, typer.Option("--format", help="Output format (tsv, json)")] = "tsv",
+    limit: Annotated[int | None, typer.Option("--limit", "-l", help="Limit number of results")] = None,
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Annotate loaded variants using reference databases.
+
+    Example:
+        vcf-pg-loader annotate <batch-id> --source gnomad_v3 --filter "gnomad_af < 0.01"
+    """
+    import csv
+    import json
+    import sys
+
+    if source is None or len(source) == 0:
+        console.print("[red]Error: --source is required[/red]")
+        raise typer.Exit(1)
+
+    if filter_expr:
+        parser = FilterExpressionParser()
+        errors = parser.validate(filter_expr, set())
+        syntax_errors = [e for e in errors if "Unknown field" not in e]
+        if syntax_errors:
+            console.print(f"[red]Error in filter expression: {'; '.join(syntax_errors)}[/red]")
+            raise typer.Exit(1)
+
+    resolved_db_url = _resolve_database_url(db_url, quiet)
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_annotate() -> list:
+        conn = await asyncpg.connect(resolved_db_url)
+        try:
+            annotator = VariantAnnotator(conn)
+            results = await annotator.annotate_variants(
+                sources=source,
+                load_batch_id=batch_id,
+                filter_expr=filter_expr,
+                limit=limit,
+            )
+            return results
+        finally:
+            await conn.close()
+
+    try:
+        results = asyncio.run(run_annotate())
+
+        if output:
+            out_file = open(output, "w")
+        else:
+            out_file = sys.stdout
+
+        try:
+            if format == "json":
+                json.dump(results, out_file, indent=2, default=str)
+                out_file.write("\n")
+            else:
+                if results:
+                    writer = csv.DictWriter(out_file, fieldnames=results[0].keys(), delimiter="\t")
+                    writer.writeheader()
+                    writer.writerows(results)
+
+            if not quiet and output:
+                console.print(f"[green]✓[/green] Wrote {len(results)} annotated variants to {output}")
+        finally:
+            if output:
+                out_file.close()
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@app.command("annotation-query")
+def annotation_query(
+    sql: str = typer.Option(..., "--sql", help="SQL query to execute"),
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    format: Annotated[str, typer.Option("--format", help="Output format (tsv, json)")] = "tsv",
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Execute an ad-hoc SQL query against annotation tables.
+
+    Example:
+        vcf-pg-loader annotation-query --sql "SELECT * FROM anno_gnomad LIMIT 10"
+    """
+    import csv
+    import json
+    import sys
+
+    resolved_db_url = _resolve_database_url(db_url, quiet)
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_query() -> list:
+        conn = await asyncpg.connect(resolved_db_url)
+        try:
+            rows = await conn.fetch(sql)
+            return [dict(row) for row in rows]
+        finally:
+            await conn.close()
+
+    try:
+        results = asyncio.run(run_query())
+
+        if format == "json":
+            print(json.dumps(results, indent=2, default=str))
+        else:
+            if results:
+                writer = csv.DictWriter(sys.stdout, fieldnames=results[0].keys(), delimiter="\t")
+                writer.writeheader()
+                writer.writerows(results)
+
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1) from None
