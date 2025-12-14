@@ -48,5 +48,4 @@ RUN useradd --create-home --shell /bin/bash vcfloader
 USER vcfloader
 WORKDIR /home/vcfloader
 
-ENTRYPOINT ["vcf-pg-loader"]
-CMD ["--help"]
+CMD ["vcf-pg-loader", "--help"]
