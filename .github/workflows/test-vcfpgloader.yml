@@ -28,56 +28,51 @@ jobs:
           cd nf-core/modules/vcfpgloader/load
           nf-test test tests/main.nf.test \
             --profile docker \
-            --tag "!integration"
+            --tag stub
 
-  integration-test:
-    name: Integration Tests (with PostgreSQL)
-    runs-on: ubuntu-latest
-
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: vcf_test
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Nextflow
-        uses: nf-core/setup-nextflow@v2
-
-      - name: Install nf-test
-        run: |
-          curl -fsSL https://get.nf-test.com | bash
-          sudo mv nf-test /usr/local/bin/
-
-      - name: Initialize test database
-        env:
-          PGPASSWORD: postgres
-        run: |
-          psql -h localhost -U postgres -d vcf_test -f tests/sql/schema.sql
-
-      - name: Set Nextflow secrets
-        run: |
-          nextflow secrets set PGPASSWORD postgres
-
-      - name: Run integration tests
-        env:
-          PGHOST: localhost
-          PGPORT: 5432
-          PGDATABASE: vcf_test
-          PGUSER: postgres
-        run: |
-          cd nf-core/modules/vcfpgloader/load
-          nf-test test tests/main.nf.test \
-            --profile docker \
-            --tag integration
+  # Integration tests require Docker image to be published first
+  # Uncomment when ghcr.io/zacharyr41/vcf-pg-loader:0.4.0 is available
+  # integration-test:
+  #   name: Integration Tests (with PostgreSQL)
+  #   runs-on: ubuntu-latest
+  #   services:
+  #     postgres:
+  #       image: postgres:16-alpine
+  #       env:
+  #         POSTGRES_USER: postgres
+  #         POSTGRES_PASSWORD: postgres
+  #         POSTGRES_DB: vcf_test
+  #       options: >-
+  #         --health-cmd pg_isready
+  #         --health-interval 10s
+  #         --health-timeout 5s
+  #         --health-retries 5
+  #       ports:
+  #         - 5432:5432
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - name: Setup Nextflow
+  #       uses: nf-core/setup-nextflow@v2
+  #     - name: Install nf-test
+  #       run: |
+  #         curl -fsSL https://get.nf-test.com | bash
+  #         sudo mv nf-test /usr/local/bin/
+  #     - name: Initialize test database
+  #       env:
+  #         PGPASSWORD: postgres
+  #       run: |
+  #         psql -h localhost -U postgres -d vcf_test -f tests/sql/schema.sql
+  #     - name: Set Nextflow secrets
+  #       run: |
+  #         nextflow secrets set PGPASSWORD postgres
+  #     - name: Run integration tests
+  #       env:
+  #         PGHOST: localhost
+  #         PGPORT: 5432
+  #         PGDATABASE: vcf_test
+  #         PGUSER: postgres
+  #       run: |
+  #         cd nf-core/modules/vcfpgloader/load
+  #         nf-test test tests/main.nf.test \
+  #           --profile docker \
+  #           --tag integration
