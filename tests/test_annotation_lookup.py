@@ -82,86 +82,110 @@ class TestAnnotationSchemaCreation:
     """Test annotation reference table schema creation."""
 
     @pytest.fixture
-    async def db_conn(self, postgres_container):
+    def db_conn(self, postgres_container):
+        import asyncio
+
         import asyncpg
 
         from vcf_pg_loader.schema import SchemaManager
 
-        conn = await asyncpg.connect(fix_postgres_url(postgres_container.get_connection_url()))
-        schema_mgr = SchemaManager(human_genome=True)
-        await schema_mgr.create_schema(conn)
-        yield conn
-        await conn.close()
+        async def get_conn():
+            conn = await asyncpg.connect(fix_postgres_url(postgres_container.get_connection_url()))
+            schema_mgr = SchemaManager(human_genome=True)
+            await schema_mgr.create_schema(conn)
+            return conn
 
-    async def test_create_annotation_registry_table(self, db_conn):
+        return asyncio.get_event_loop().run_until_complete(get_conn())
+
+    def test_create_annotation_registry_table(self, db_conn):
+        import asyncio
+
         from vcf_pg_loader.annotation_schema import AnnotationSchemaManager
 
-        manager = AnnotationSchemaManager()
-        await manager.create_annotation_registry(db_conn)
+        async def run():
+            manager = AnnotationSchemaManager()
+            await manager.create_annotation_registry(db_conn)
 
-        result = await db_conn.fetchval(
-            "SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'annotation_sources')"
-        )
-        assert result is True
+            result = await db_conn.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'annotation_sources')"
+            )
+            assert result is True
 
-    async def test_create_annotation_source_table(self, db_conn, tmp_path):
+        asyncio.get_event_loop().run_until_complete(run())
+
+    def test_create_annotation_source_table(self, db_conn, tmp_path):
+        import asyncio
+
         from vcf_pg_loader.annotation_config import load_field_config
         from vcf_pg_loader.annotation_schema import AnnotationSchemaManager
 
         config_path = tmp_path / "gnomad.json"
         config_path.write_text(json.dumps(get_gnomad_field_config()))
 
-        fields = load_field_config(config_path)
-        manager = AnnotationSchemaManager()
-        await manager.create_annotation_source_table(db_conn, "gnomad_test", fields)
+        async def run():
+            fields = load_field_config(config_path)
+            manager = AnnotationSchemaManager()
+            await manager.create_annotation_source_table(db_conn, "gnomad_test", fields)
 
-        result = await db_conn.fetchval(
-            "SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'anno_gnomad_test')"
-        )
-        assert result is True
+            result = await db_conn.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'anno_gnomad_test')"
+            )
+            assert result is True
 
-    async def test_annotation_table_has_variant_composite_key(self, db_conn, tmp_path):
+        asyncio.get_event_loop().run_until_complete(run())
+
+    def test_annotation_table_has_variant_composite_key(self, db_conn, tmp_path):
+        import asyncio
+
         from vcf_pg_loader.annotation_config import load_field_config
         from vcf_pg_loader.annotation_schema import AnnotationSchemaManager
 
         config_path = tmp_path / "gnomad.json"
         config_path.write_text(json.dumps(get_gnomad_field_config()))
 
-        fields = load_field_config(config_path)
-        manager = AnnotationSchemaManager()
-        await manager.create_annotation_source_table(db_conn, "gnomad_pk_test", fields)
+        async def run():
+            fields = load_field_config(config_path)
+            manager = AnnotationSchemaManager()
+            await manager.create_annotation_source_table(db_conn, "gnomad_pk_test", fields)
 
-        columns = await db_conn.fetch("""
-            SELECT column_name FROM information_schema.columns
-            WHERE table_name = 'anno_gnomad_pk_test'
-            ORDER BY ordinal_position
-        """)
-        col_names = [r["column_name"] for r in columns]
+            columns = await db_conn.fetch("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name = 'anno_gnomad_pk_test'
+                ORDER BY ordinal_position
+            """)
+            col_names = [r["column_name"] for r in columns]
 
-        assert "chrom" in col_names
-        assert "pos" in col_names
-        assert "ref" in col_names
-        assert "alt" in col_names
+            assert "chrom" in col_names
+            assert "pos" in col_names
+            assert "ref" in col_names
+            assert "alt" in col_names
 
-    async def test_annotation_table_has_lookup_index(self, db_conn, tmp_path):
+        asyncio.get_event_loop().run_until_complete(run())
+
+    def test_annotation_table_has_lookup_index(self, db_conn, tmp_path):
+        import asyncio
+
         from vcf_pg_loader.annotation_config import load_field_config
         from vcf_pg_loader.annotation_schema import AnnotationSchemaManager
 
         config_path = tmp_path / "gnomad.json"
         config_path.write_text(json.dumps(get_gnomad_field_config()))
 
-        fields = load_field_config(config_path)
-        manager = AnnotationSchemaManager()
-        await manager.create_annotation_source_table(db_conn, "gnomad_idx_test", fields)
-        await manager.create_variant_lookup_index(db_conn, "gnomad_idx_test")
+        async def run():
+            fields = load_field_config(config_path)
+            manager = AnnotationSchemaManager()
+            await manager.create_annotation_source_table(db_conn, "gnomad_idx_test", fields)
+            await manager.create_variant_lookup_index(db_conn, "gnomad_idx_test")
 
-        indexes = await db_conn.fetch("""
-            SELECT indexname FROM pg_indexes
-            WHERE tablename = 'anno_gnomad_idx_test'
-        """)
-        index_names = [r["indexname"] for r in indexes]
+            indexes = await db_conn.fetch("""
+                SELECT indexname FROM pg_indexes
+                WHERE tablename = 'anno_gnomad_idx_test'
+            """)
+            index_names = [r["indexname"] for r in indexes]
 
-        assert any("lookup" in name for name in index_names)
+            assert any("lookup" in name for name in index_names)
+
+        asyncio.get_event_loop().run_until_complete(run())
 
 
 @pytest.mark.integration
@@ -169,18 +193,24 @@ class TestAnnotationLoading:
     """Test loading population databases as annotation sources."""
 
     @pytest.fixture
-    async def db_conn(self, postgres_container):
+    def db_conn(self, postgres_container):
+        import asyncio
+
         import asyncpg
 
         from vcf_pg_loader.schema import SchemaManager
 
-        conn = await asyncpg.connect(fix_postgres_url(postgres_container.get_connection_url()))
-        schema_mgr = SchemaManager(human_genome=True)
-        await schema_mgr.create_schema(conn)
-        yield conn
-        await conn.close()
+        async def get_conn():
+            conn = await asyncpg.connect(fix_postgres_url(postgres_container.get_connection_url()))
+            schema_mgr = SchemaManager(human_genome=True)
+            await schema_mgr.create_schema(conn)
+            return conn
 
-    async def test_load_gnomad_vcf_as_annotation_source(self, db_conn, tmp_path):
+        return asyncio.get_event_loop().run_until_complete(get_conn())
+
+    def test_load_gnomad_vcf_as_annotation_source(self, db_conn, tmp_path):
+        import asyncio
+
         from vcf_pg_loader.annotation_config import load_field_config
         from vcf_pg_loader.annotation_loader import AnnotationLoader
 
@@ -191,17 +221,22 @@ class TestAnnotationLoading:
         config_path.write_text(json.dumps(get_gnomad_field_config()))
         fields = load_field_config(config_path)
 
-        loader = AnnotationLoader()
-        result = await loader.load_annotation_source(
-            vcf_path=vcf_path,
-            source_name="gnomad_v3_test",
-            field_config=fields,
-            conn=db_conn,
-        )
+        async def run():
+            loader = AnnotationLoader()
+            result = await loader.load_annotation_source(
+                vcf_path=vcf_path,
+                source_name="gnomad_v3_test",
+                field_config=fields,
+                conn=db_conn,
+            )
 
-        assert result["variants_loaded"] == 100
+            assert result["variants_loaded"] == 100
 
-    async def test_load_multiple_annotation_sources(self, db_conn, tmp_path):
+        asyncio.get_event_loop().run_until_complete(run())
+
+    def test_load_multiple_annotation_sources(self, db_conn, tmp_path):
+        import asyncio
+
         from vcf_pg_loader.annotation_config import load_field_config
         from vcf_pg_loader.annotation_loader import AnnotationLoader
 
@@ -222,30 +257,35 @@ class TestAnnotationLoading:
         clinvar_config.write_text(json.dumps(get_clinvar_field_config()))
         clinvar_fields = load_field_config(clinvar_config)
 
-        loader = AnnotationLoader()
+        async def run():
+            loader = AnnotationLoader()
 
-        result1 = await loader.load_annotation_source(
-            vcf_path=gnomad_vcf,
-            source_name="gnomad_multi",
-            field_config=gnomad_fields,
-            conn=db_conn,
-        )
-        result2 = await loader.load_annotation_source(
-            vcf_path=clinvar_vcf,
-            source_name="clinvar_multi",
-            field_config=clinvar_fields,
-            conn=db_conn,
-        )
+            result1 = await loader.load_annotation_source(
+                vcf_path=gnomad_vcf,
+                source_name="gnomad_multi",
+                field_config=gnomad_fields,
+                conn=db_conn,
+            )
+            result2 = await loader.load_annotation_source(
+                vcf_path=clinvar_vcf,
+                source_name="clinvar_multi",
+                field_config=clinvar_fields,
+                conn=db_conn,
+            )
 
-        assert result1["variants_loaded"] == 50
-        assert result2["variants_loaded"] == 50
+            assert result1["variants_loaded"] == 50
+            assert result2["variants_loaded"] == 50
 
-        sources = await db_conn.fetch("SELECT name FROM annotation_sources")
-        source_names = [r["name"] for r in sources]
-        assert "gnomad_multi" in source_names
-        assert "clinvar_multi" in source_names
+            sources = await db_conn.fetch("SELECT name FROM annotation_sources")
+            source_names = [r["name"] for r in sources]
+            assert "gnomad_multi" in source_names
+            assert "clinvar_multi" in source_names
 
-    async def test_annotation_source_tracks_version(self, db_conn, tmp_path):
+        asyncio.get_event_loop().run_until_complete(run())
+
+    def test_annotation_source_tracks_version(self, db_conn, tmp_path):
+        import asyncio
+
         from vcf_pg_loader.annotation_config import load_field_config
         from vcf_pg_loader.annotation_loader import AnnotationLoader
 
@@ -257,20 +297,23 @@ class TestAnnotationLoading:
         config_path.write_text(json.dumps(get_gnomad_field_config()))
         fields = load_field_config(config_path)
 
-        loader = AnnotationLoader()
-        await loader.load_annotation_source(
-            vcf_path=vcf_path,
-            source_name="gnomad_v3_1_2",
-            field_config=fields,
-            conn=db_conn,
-            version="v3.1.2",
-        )
+        async def run():
+            loader = AnnotationLoader()
+            await loader.load_annotation_source(
+                vcf_path=vcf_path,
+                source_name="gnomad_v3_1_2",
+                field_config=fields,
+                conn=db_conn,
+                version="v3.1.2",
+            )
 
-        row = await db_conn.fetchrow(
-            "SELECT version FROM annotation_sources WHERE name = $1",
-            "gnomad_v3_1_2",
-        )
-        assert row["version"] == "v3.1.2"
+            row = await db_conn.fetchrow(
+                "SELECT version FROM annotation_sources WHERE name = $1",
+                "gnomad_v3_1_2",
+            )
+            assert row["version"] == "v3.1.2"
+
+        asyncio.get_event_loop().run_until_complete(run())
 
 
 @pytest.mark.integration
@@ -278,7 +321,9 @@ class TestAnnotationLookup:
     """Test variant annotation via SQL JOIN."""
 
     @pytest.fixture
-    async def db_with_annotations(self, postgres_container, tmp_path):
+    def db_with_annotations(self, postgres_container, tmp_path):
+        import asyncio
+
         import asyncpg
 
         from vcf_pg_loader.annotation_config import load_field_config
@@ -297,87 +342,110 @@ class TestAnnotationLookup:
         config_path.write_text(json.dumps(get_gnomad_field_config()))
         fields = load_field_config(config_path)
 
-        db_url = fix_postgres_url(postgres_container.get_connection_url())
-        conn = await asyncpg.connect(db_url)
+        async def setup():
+            db_url = fix_postgres_url(postgres_container.get_connection_url())
+            conn = await asyncpg.connect(db_url)
 
-        schema_mgr = SchemaManager(human_genome=True)
-        await schema_mgr.create_schema(conn)
+            schema_mgr = SchemaManager(human_genome=True)
+            await schema_mgr.create_schema(conn)
 
-        loader = AnnotationLoader()
-        await loader.load_annotation_source(
-            vcf_path=db_vcf_path,
-            source_name="gnomad_test",
-            field_config=fields,
-            conn=conn,
-        )
+            loader = AnnotationLoader()
+            await loader.load_annotation_source(
+                vcf_path=db_vcf_path,
+                source_name="gnomad_test",
+                field_config=fields,
+                conn=conn,
+            )
 
-        vcf_loader = VCFLoader(
-            db_url=db_url,
-            config=LoadConfig(batch_size=1000, normalize=False),
-        )
-        await vcf_loader.load_vcf(query_vcf_path)
+            vcf_loader = VCFLoader(
+                db_url=db_url,
+                config=LoadConfig(batch_size=1000, normalize=False),
+            )
+            await vcf_loader.load_vcf(query_vcf_path)
 
+            return conn
+
+        conn = asyncio.get_event_loop().run_until_complete(setup())
         yield {
             "conn": conn,
             "n_shared": 100,
             "n_query_only": 50,
         }
-        await conn.close()
 
-    async def test_annotate_variants_with_gnomad_af(self, db_with_annotations):
+    def test_annotate_variants_with_gnomad_af(self, db_with_annotations):
+        import asyncio
+
         from vcf_pg_loader.annotator import VariantAnnotator
 
-        conn = db_with_annotations["conn"]
-        annotator = VariantAnnotator(conn)
+        async def run():
+            conn = db_with_annotations["conn"]
+            annotator = VariantAnnotator(conn)
 
-        results = await annotator.annotate_variants(
-            sources=["gnomad_test"],
-        )
+            results = await annotator.annotate_variants(
+                sources=["gnomad_test"],
+            )
 
-        annotated = [r for r in results if r.get("gnomad_af") is not None]
-        assert len(annotated) == db_with_annotations["n_shared"]
+            annotated = [r for r in results if r.get("gnomad_af") is not None]
+            assert len(annotated) == db_with_annotations["n_shared"]
 
-    async def test_annotate_returns_null_for_novel_variants(self, db_with_annotations):
+        asyncio.get_event_loop().run_until_complete(run())
+
+    def test_annotate_returns_null_for_novel_variants(self, db_with_annotations):
+        import asyncio
+
         from vcf_pg_loader.annotator import VariantAnnotator
 
-        conn = db_with_annotations["conn"]
-        annotator = VariantAnnotator(conn)
+        async def run():
+            conn = db_with_annotations["conn"]
+            annotator = VariantAnnotator(conn)
 
-        results = await annotator.annotate_variants(
-            sources=["gnomad_test"],
-        )
+            results = await annotator.annotate_variants(
+                sources=["gnomad_test"],
+            )
 
-        novel = [r for r in results if r.get("gnomad_af") is None]
-        assert len(novel) == db_with_annotations["n_query_only"]
+            novel = [r for r in results if r.get("gnomad_af") is None]
+            assert len(novel) == db_with_annotations["n_query_only"]
 
-    async def test_annotate_with_expression_filter(self, db_with_annotations):
+        asyncio.get_event_loop().run_until_complete(run())
+
+    def test_annotate_with_expression_filter(self, db_with_annotations):
+        import asyncio
+
         from vcf_pg_loader.annotator import VariantAnnotator
 
-        conn = db_with_annotations["conn"]
-        annotator = VariantAnnotator(conn)
+        async def run():
+            conn = db_with_annotations["conn"]
+            annotator = VariantAnnotator(conn)
 
-        results = await annotator.annotate_variants(
-            sources=["gnomad_test"],
-            filter_expr="gnomad_af < 0.01",
-        )
+            results = await annotator.annotate_variants(
+                sources=["gnomad_test"],
+                filter_expr="gnomad_af < 0.01",
+            )
 
-        for r in results:
-            if r.get("gnomad_af") is not None:
-                assert r["gnomad_af"] < 0.01
+            for r in results:
+                if r.get("gnomad_af") is not None:
+                    assert r["gnomad_af"] < 0.01
 
-    async def test_annotate_with_missing_value_filter(self, db_with_annotations):
+        asyncio.get_event_loop().run_until_complete(run())
+
+    def test_annotate_with_missing_value_filter(self, db_with_annotations):
+        import asyncio
+
         from vcf_pg_loader.annotator import VariantAnnotator
 
-        conn = db_with_annotations["conn"]
-        annotator = VariantAnnotator(conn)
+        async def run():
+            conn = db_with_annotations["conn"]
+            annotator = VariantAnnotator(conn)
 
-        results = await annotator.annotate_variants(
-            sources=["gnomad_test"],
-            filter_expr="gnomad_af < 0.01 || gnomad_af IS NULL",
-        )
+            results = await annotator.annotate_variants(
+                sources=["gnomad_test"],
+                filter_expr="gnomad_af < 0.01 || gnomad_af IS NULL",
+            )
 
-        total_expected = db_with_annotations["n_shared"] + db_with_annotations["n_query_only"]
-        assert len(results) <= total_expected
+            total_expected = db_with_annotations["n_shared"] + db_with_annotations["n_query_only"]
+            assert len(results) <= total_expected
+
+        asyncio.get_event_loop().run_until_complete(run())
 
 
 @pytest.mark.integration
@@ -385,18 +453,24 @@ class TestAnnotationChrPrefixHandling:
     """Test chromosome prefix handling during annotation lookup."""
 
     @pytest.fixture
-    async def db_conn(self, postgres_container):
+    def db_conn(self, postgres_container):
+        import asyncio
+
         import asyncpg
 
         from vcf_pg_loader.schema import SchemaManager
 
-        conn = await asyncpg.connect(fix_postgres_url(postgres_container.get_connection_url()))
-        schema_mgr = SchemaManager(human_genome=True)
-        await schema_mgr.create_schema(conn)
-        yield conn
-        await conn.close()
+        async def get_conn():
+            conn = await asyncpg.connect(fix_postgres_url(postgres_container.get_connection_url()))
+            schema_mgr = SchemaManager(human_genome=True)
+            await schema_mgr.create_schema(conn)
+            return conn
 
-    async def test_annotate_handles_chr_prefix_mismatch(self, db_conn, tmp_path):
+        return asyncio.get_event_loop().run_until_complete(get_conn())
+
+    def test_annotate_handles_chr_prefix_mismatch(self, db_conn, tmp_path):
+        import asyncio
+
         from vcf_pg_loader.annotation_config import load_field_config
         from vcf_pg_loader.annotation_loader import AnnotationLoader
         from vcf_pg_loader.annotator import VariantAnnotator
@@ -410,16 +484,19 @@ class TestAnnotationChrPrefixHandling:
         config_path.write_text(json.dumps(get_gnomad_field_config()))
         fields = load_field_config(config_path)
 
-        loader = AnnotationLoader()
-        await loader.load_annotation_source(
-            vcf_path=db_vcf_path,
-            source_name="gnomad_chr",
-            field_config=fields,
-            conn=db_conn,
-        )
+        async def run():
+            loader = AnnotationLoader()
+            await loader.load_annotation_source(
+                vcf_path=db_vcf_path,
+                source_name="gnomad_chr",
+                field_config=fields,
+                conn=db_conn,
+            )
 
-        annotator = VariantAnnotator(db_conn)
-        annotator.normalize_chr_prefix = True
+            annotator = VariantAnnotator(db_conn)
+            annotator.normalize_chr_prefix = True
+
+        asyncio.get_event_loop().run_until_complete(run())
 
 
 class TestExpressionParser:
@@ -521,8 +598,10 @@ class TestAnnotationPerformance:
     """Benchmark annotation lookup speed."""
 
     @pytest.fixture
-    async def benchmark_db(self, postgres_container, tmp_path):
+    def benchmark_db(self, postgres_container, tmp_path):
         """Create DB with 10K matching annotation and query variants."""
+        import asyncio
+
         import asyncpg
 
         from vcf_pg_loader.annotation_config import load_field_config
@@ -539,55 +618,62 @@ class TestAnnotationPerformance:
         config_path.write_text(json.dumps(get_gnomad_field_config()))
         fields = load_field_config(config_path)
 
-        db_url = fix_postgres_url(postgres_container.get_connection_url())
-        conn = await asyncpg.connect(db_url)
-        schema_mgr = SchemaManager(human_genome=True)
-        await schema_mgr.create_schema(conn)
+        async def setup():
+            db_url = fix_postgres_url(postgres_container.get_connection_url())
+            conn = await asyncpg.connect(db_url)
+            schema_mgr = SchemaManager(human_genome=True)
+            await schema_mgr.create_schema(conn)
 
-        loader = AnnotationLoader()
-        await loader.load_annotation_source(
-            vcf_path=db_vcf_path,
-            source_name="gnomad_bench",
-            field_config=fields,
-            conn=conn,
-        )
-        await conn.close()
+            loader = AnnotationLoader()
+            await loader.load_annotation_source(
+                vcf_path=db_vcf_path,
+                source_name="gnomad_bench",
+                field_config=fields,
+                conn=conn,
+            )
+            await conn.close()
 
-        vcf_loader = VCFLoader(db_url, LoadConfig(batch_size=5000, normalize=False))
-        load_result = await vcf_loader.load_vcf(query_vcf_path)
+            vcf_loader = VCFLoader(db_url, LoadConfig(batch_size=5000, normalize=False))
+            load_result = await vcf_loader.load_vcf(query_vcf_path)
 
-        conn = await asyncpg.connect(db_url)
-        yield {"conn": conn, "batch_id": str(load_result["load_batch_id"]), "n_variants": n_variants}
-        await conn.close()
+            conn = await asyncpg.connect(db_url)
+            return {"conn": conn, "batch_id": str(load_result["load_batch_id"]), "n_variants": n_variants}
 
-    async def test_annotation_lookup_performance(self, benchmark_db):
+        return asyncio.get_event_loop().run_until_complete(setup())
+
+    def test_annotation_lookup_performance(self, benchmark_db):
         """Benchmark: annotation lookup should process >100K variants/sec."""
+        import asyncio
         import time
 
         from vcf_pg_loader.annotator import VariantAnnotator
 
-        annotator = VariantAnnotator(benchmark_db["conn"])
+        async def run():
+            annotator = VariantAnnotator(benchmark_db["conn"])
 
-        start = time.time()
-        results = await annotator.annotate_variants(
-            sources=["gnomad_bench"],
-            load_batch_id=benchmark_db["batch_id"],
-        )
-        elapsed = time.time() - start
+            start = time.time()
+            results = await annotator.annotate_variants(
+                sources=["gnomad_bench"],
+                load_batch_id=benchmark_db["batch_id"],
+            )
+            elapsed = time.time() - start
 
-        n_variants = len(results)
-        rate = n_variants / elapsed if elapsed > 0 else 0
-        annotated = sum(1 for r in results if r.get("gnomad_af") is not None)
+            n_variants = len(results)
+            rate = n_variants / elapsed if elapsed > 0 else 0
+            annotated = sum(1 for r in results if r.get("gnomad_af") is not None)
 
-        print(f"\n  Annotation lookup: {n_variants:,} variants in {elapsed:.3f}s ({rate:,.0f}/sec)")
-        print(f"  Found annotations: {annotated:,}/{n_variants:,} ({100*annotated/n_variants:.1f}%)")
+            print(f"\n  Annotation lookup: {n_variants:,} variants in {elapsed:.3f}s ({rate:,.0f}/sec)")
+            print(f"  Found annotations: {annotated:,}/{n_variants:,} ({100*annotated/n_variants:.1f}%)")
 
-        assert n_variants == benchmark_db["n_variants"]
-        assert annotated == n_variants
-        assert rate > 50000
+            assert n_variants == benchmark_db["n_variants"]
+            assert annotated == n_variants
+            assert rate > 50000
 
-    async def test_annotation_load_performance(self, postgres_container, tmp_path):
+        asyncio.get_event_loop().run_until_complete(run())
+
+    def test_annotation_load_performance(self, postgres_container, tmp_path):
         """Benchmark: annotation DB loading should process >50K variants/sec."""
+        import asyncio
         import time
 
         import asyncpg
@@ -604,47 +690,54 @@ class TestAnnotationPerformance:
         config_path.write_text(json.dumps(get_gnomad_field_config()))
         fields = load_field_config(config_path)
 
-        db_url = fix_postgres_url(postgres_container.get_connection_url())
-        conn = await asyncpg.connect(db_url)
-        schema_mgr = SchemaManager(human_genome=True)
-        await schema_mgr.create_schema(conn)
+        async def run():
+            db_url = fix_postgres_url(postgres_container.get_connection_url())
+            conn = await asyncpg.connect(db_url)
+            schema_mgr = SchemaManager(human_genome=True)
+            await schema_mgr.create_schema(conn)
 
-        loader = AnnotationLoader()
-        start = time.time()
-        result = await loader.load_annotation_source(
-            vcf_path=db_vcf_path,
-            source_name="gnomad_load_bench",
-            field_config=fields,
-            conn=conn,
-        )
-        elapsed = time.time() - start
+            loader = AnnotationLoader()
+            start = time.time()
+            result = await loader.load_annotation_source(
+                vcf_path=db_vcf_path,
+                source_name="gnomad_load_bench",
+                field_config=fields,
+                conn=conn,
+            )
+            elapsed = time.time() - start
 
-        rate = result["variants_loaded"] / elapsed
-        print(f"\n  Annotation load: {result['variants_loaded']:,} variants in {elapsed:.2f}s ({rate:,.0f}/sec)")
+            rate = result["variants_loaded"] / elapsed
+            print(f"\n  Annotation load: {result['variants_loaded']:,} variants in {elapsed:.2f}s ({rate:,.0f}/sec)")
 
-        assert result["variants_loaded"] == n_variants
-        assert rate > 50000
+            assert result["variants_loaded"] == n_variants
+            assert rate > 50000
 
-        await conn.close()
+            await conn.close()
 
-    async def test_filtered_annotation_performance(self, benchmark_db):
+        asyncio.get_event_loop().run_until_complete(run())
+
+    def test_filtered_annotation_performance(self, benchmark_db):
         """Benchmark: filtered annotation lookup with expression."""
+        import asyncio
         import time
 
         from vcf_pg_loader.annotator import VariantAnnotator
 
-        annotator = VariantAnnotator(benchmark_db["conn"])
+        async def run():
+            annotator = VariantAnnotator(benchmark_db["conn"])
 
-        start = time.time()
-        results = await annotator.annotate_variants(
-            sources=["gnomad_bench"],
-            load_batch_id=benchmark_db["batch_id"],
-            filter_expr="gnomad_af < 0.01",
-        )
-        elapsed = time.time() - start
+            start = time.time()
+            results = await annotator.annotate_variants(
+                sources=["gnomad_bench"],
+                load_batch_id=benchmark_db["batch_id"],
+                filter_expr="gnomad_af < 0.01",
+            )
+            elapsed = time.time() - start
 
-        print(f"\n  Filtered lookup (AF<0.01): {len(results):,} variants in {elapsed:.3f}s")
+            print(f"\n  Filtered lookup (AF<0.01): {len(results):,} variants in {elapsed:.3f}s")
 
-        for r in results:
-            if r.get("gnomad_af") is not None:
-                assert r["gnomad_af"] < 0.01
+            for r in results:
+                if r.get("gnomad_af") is not None:
+                    assert r["gnomad_af"] < 0.01
+
+        asyncio.get_event_loop().run_until_complete(run())
