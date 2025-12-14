@@ -44,8 +44,6 @@ COPY --from=builder /opt/venv /opt/venv
 ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-RUN useradd --create-home --shell /bin/bash vcfloader
-USER vcfloader
-WORKDIR /home/vcfloader
+WORKDIR /work
 
 CMD ["vcf-pg-loader", "--help"]
