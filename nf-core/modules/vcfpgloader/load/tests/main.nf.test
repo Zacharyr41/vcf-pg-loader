@@ -34,8 +34,8 @@ nextflow_process {
         then {
             assertAll(
                 { assert process.success },
-                { assert process.out.report.get(0).get(1).exists() },
-                { assert process.out.log.get(0).get(1).exists() },
+                { assert path(process.out.report.get(0).get(1)).exists() },
+                { assert path(process.out.log.get(0).get(1)).exists() },
                 { assert snapshot(process.out.versions).match() }
             )
         }
@@ -65,7 +65,7 @@ nextflow_process {
         then {
             assertAll(
                 { assert process.success },
-                { assert process.out.report.get(0).get(1).exists() },
+                { assert path(process.out.report.get(0).get(1)).exists() },
                 { assert snapshot(process.out.versions).match() }
             )
         }
@@ -101,7 +101,7 @@ nextflow_process {
         then {
             assertAll(
                 { assert process.success },
-                { assert process.out.report.get(0).get(1).exists() },
+                { assert path(process.out.report.get(0).get(1)).exists() },
                 { assert process.out.row_count.get(0).get(1).toInteger() > 0 },
                 { assert snapshot(process.out.versions).match() }
             )
