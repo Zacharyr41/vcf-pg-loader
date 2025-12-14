@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 from pathlib import Path
 from typing import Annotated
 from uuid import UUID
@@ -11,6 +12,7 @@ import typer
 from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
 
+from . import __version__
 from .annotation_config import load_field_config
 from .annotation_loader import AnnotationLoader
 from .annotation_schema import AnnotationSchemaManager
@@ -20,11 +22,28 @@ from .expression import FilterExpressionParser
 from .loader import LoadConfig, VCFLoader
 from .schema import SchemaManager
 
+
+def version_callback(value: bool) -> None:
+    if value:
+        print(__version__)
+        raise typer.Exit()
+
+
 app = typer.Typer(
     name="vcf-pg-loader",
     help="Load VCF files into PostgreSQL with clinical-grade compliance"
 )
 console = Console()
+
+
+@app.callback()
+def main_callback(
+    version: Annotated[
+        bool | None,
+        typer.Option("--version", callback=version_callback, is_eager=True, help="Show version and exit")
+    ] = None,
+) -> None:
+    pass
 
 
 def setup_logging(verbose: bool, quiet: bool) -> None:
@@ -44,6 +63,30 @@ def setup_logging(verbose: bool, quiet: bool) -> None:
     logging.getLogger("vcf_pg_loader").setLevel(level)
 
 
+def _get_database_url_from_env() -> str | None:
+    """Build database URL from environment variables.
+
+    Supports:
+        - POSTGRES_URL: Full connection URL (highest priority)
+        - Individual vars: PGHOST, PGPORT, PGUSER, PGPASSWORD, PGDATABASE
+    """
+    if url := os.environ.get("POSTGRES_URL"):
+        return url
+
+    host = os.environ.get("PGHOST")
+    if not host:
+        return None
+
+    port = os.environ.get("PGPORT", "5432")
+    user = os.environ.get("PGUSER", "postgres")
+    password = os.environ.get("PGPASSWORD", "")
+    database = os.environ.get("PGDATABASE", "variants")
+
+    if password:
+        return f"postgresql://{user}:{password}@{host}:{port}/{database}"
+    return f"postgresql://{user}@{host}:{port}/{database}"
+
+
 def _resolve_database_url(db_url: str | None, quiet: bool) -> str | None:
     """Resolve database URL, using managed database if needed.
 
@@ -59,6 +102,11 @@ def _resolve_database_url(db_url: str | None, quiet: bool) -> str | None:
 
     if db_url is not None and db_url.lower() != "auto":
         return db_url
+
+    if env_url := _get_database_url_from_env():
+        if not quiet:
+            console.print("[dim]Using database from environment variables[/dim]")
+        return env_url
 
     try:
         db = ManagedDatabase()
@@ -110,6 +158,7 @@ def load(
     human_genome: bool = typer.Option(True, "--human-genome/--no-human-genome", help="Use human chromosome enum type"),
     force: bool = typer.Option(False, "--force", "-f", help="Force reload even if file was already loaded"),
     config_file: Annotated[Path | None, typer.Option("--config", "-c", help="TOML configuration file")] = None,
+    report: Annotated[Path | None, typer.Option("--report", "-r", help="Write JSON report to file")] = None,
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable verbose logging"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
     progress: bool = typer.Option(True, "--progress/--no-progress", help="Show progress bar"),
@@ -179,11 +228,35 @@ def load(
                 console.print(f"  Previous Batch ID: {result['previous_load_id']}")
                 console.print(f"  File SHA256: {result['file_hash']}")
                 console.print("  Use --force to reload")
+            report_data = {
+                "status": "skipped",
+                "variants_loaded": 0,
+                "load_batch_id": str(result.get("previous_load_id", "")),
+                "file_hash": result.get("file_hash", ""),
+            }
         else:
             if not quiet:
                 console.print(f"[green]✓[/green] Loaded {result['variants_loaded']:,} variants")
                 console.print(f"  Batch ID: {result['load_batch_id']}")
                 console.print(f"  File SHA256: {result['file_hash']}")
+            report_data = {
+                "status": "success",
+                "variants_loaded": result.get("variants_loaded", 0),
+                "load_batch_id": str(result.get("load_batch_id", "")),
+                "file_hash": result.get("file_hash", ""),
+            }
+
+        if report:
+            import json
+            import time
+            report_data["elapsed_seconds"] = result.get("elapsed_seconds", 0)
+            report_data["vcf_file"] = str(vcf_path)
+            report_data["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            with open(report, "w") as f:
+                json.dump(report_data, f, indent=2)
+                f.write("\n")
+            if not quiet:
+                console.print(f"  Report: {report}")
 
     except ConnectionError as e:
         console.print(f"[red]Error: Database connection failed: {e}[/red]")

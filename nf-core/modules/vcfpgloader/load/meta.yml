@@ -1,0 +1,52 @@
+---
+# yaml-language-server: $schema=https://raw.githubusercontent.com/nf-core/modules/master/modules/meta-schema.json
+name: "vcfpgloader_load"
+description: Load VCF files into PostgreSQL database with clinical-grade compliance
+keywords:
+  - vcf
+  - postgresql
+  - database
+  - variants
+  - genomics
+  - loading
+tools:
+  - "vcfpgloader":
+      description: "High-performance VCF to PostgreSQL loader with clinical-grade compliance"
+      homepage: "https://github.com/Zacharyr41/vcf-pg-loader"
+      documentation: "https://github.com/Zacharyr41/vcf-pg-loader#readme"
+      tool_dev_url: "https://github.com/Zacharyr41/vcf-pg-loader"
+      licence: ["MIT"]
+      args_id: "$args"
+
+input:
+  - - meta:
+        type: map
+        description: |
+          Groovy Map containing sample information
+          e.g. `[ id:'sample1' ]`
+    - vcf:
+        type: file
+        description: VCF file to load into PostgreSQL
+        pattern: "*.{vcf,vcf.gz}"
+        ontologies:
+          - edam: http://edamontology.org/format_3016
+
+output:
+  - report:
+      - meta:
+          type: map
+          description: Groovy Map containing sample information
+      - "*.load_report.json":
+          type: file
+          description: JSON report with loading statistics
+          pattern: "*.load_report.json"
+  - versions:
+      - "versions.yml":
+          type: file
+          description: File containing software versions
+          pattern: "versions.yml"
+
+authors:
+  - "@Zacharyr41"
+maintainers:
+  - "@Zacharyr41"
