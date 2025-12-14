@@ -291,6 +291,8 @@ def benchmark(
     batch_size: int = typer.Option(50000, "--batch", "-b", help="Records per batch"),
     normalize: bool = typer.Option(True, "--normalize/--no-normalize", help="Normalize variants"),
     human_genome: bool = typer.Option(True, "--human-genome/--no-human-genome", help="Use human chromosome enum type"),
+    realistic: bool = typer.Option(False, "--realistic", "-r", help="Generate realistic VCF with annotations and complex variants"),
+    giab: bool = typer.Option(False, "--giab", "-g", help="Generate GIAB-style VCF with platform/callset metadata"),
     json_output: bool = typer.Option(False, "--json", help="Output results as JSON"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Minimal output"),
 ) -> None:
@@ -309,6 +311,9 @@ def benchmark(
 
         # Full benchmark including database loading
         vcf-pg-loader benchmark --synthetic 50000 --db postgresql://localhost/variants
+
+        # GIAB-style benchmark with platform/callset metadata
+        vcf-pg-loader benchmark --synthetic 100000 --giab --db postgresql://localhost/variants
     """
     import json
 
@@ -326,6 +331,8 @@ def benchmark(
             batch_size=batch_size,
             normalize=normalize,
             human_genome=human_genome,
+            realistic=realistic,
+            giab=giab,
         )
 
         if json_output:
