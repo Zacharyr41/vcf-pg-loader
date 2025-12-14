@@ -1,9 +1,22 @@
 """PostgreSQL schema management for annotation reference tables."""
 import json
+import re
 
 import asyncpg
 
 from .annotation_config import AnnotationFieldConfig, config_to_dict
+
+
+def validate_identifier(name: str, identifier_type: str = "identifier") -> None:
+    if not name:
+        raise ValueError(f"Invalid {identifier_type}: cannot be empty")
+    if len(name) > 63:
+        raise ValueError(f"Invalid {identifier_type}: '{name}' exceeds 63 character limit")
+    if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', name):
+        raise ValueError(
+            f"Invalid {identifier_type}: '{name}' must start with a letter or underscore "
+            "and contain only alphanumeric characters and underscores"
+        )
 
 
 class AnnotationSchemaManager:
@@ -48,6 +61,7 @@ class AnnotationSchemaManager:
         Returns:
             The name of the created table
         """
+        validate_identifier(source_name, "source name")
         table_name = f"anno_{source_name}"
 
         if self.human_genome:
@@ -88,6 +102,7 @@ class AnnotationSchemaManager:
             conn: Database connection
             source_name: Name of the annotation source
         """
+        validate_identifier(source_name, "source name")
         table_name = f"anno_{source_name}"
         index_name = f"idx_{table_name}_lookup"
 
@@ -110,6 +125,7 @@ class AnnotationSchemaManager:
         Returns:
             True if the source was dropped, False if it didn't exist
         """
+        validate_identifier(source_name, "source name")
         table_name = f"anno_{source_name}"
 
         result = await conn.fetchval(

@@ -1,10 +1,11 @@
 """Variant annotator using SQL JOINs against reference databases."""
 import logging
+import re
 from typing import Any
 
 import asyncpg
 
-from .annotation_schema import AnnotationSchemaManager
+from .annotation_schema import AnnotationSchemaManager, validate_identifier
 from .expression import FilterExpressionParser
 
 logger = logging.getLogger(__name__)
@@ -44,7 +45,7 @@ class VariantAnnotator:
         """
         available_fields = await self._get_available_fields(sources)
 
-        query = await self._build_annotation_query(
+        query, params = await self._build_annotation_query(
             sources=sources,
             load_batch_id=load_batch_id,
             filter_expr=filter_expr,
@@ -54,7 +55,7 @@ class VariantAnnotator:
 
         logger.debug(f"Executing annotation query: {query}")
 
-        rows = await self.conn.fetch(query)
+        rows = await self.conn.fetch(query, *params)
 
         return [dict(row) for row in rows]
 
@@ -120,7 +121,7 @@ class VariantAnnotator:
         filter_expr: str | None,
         available_fields: set[str],
         limit: int | None,
-    ) -> str:
+    ) -> tuple[str, list]:
         """Build the SQL query for annotation lookup."""
         select_parts = [
             "v.chrom",
@@ -135,11 +136,13 @@ class VariantAnnotator:
 
         join_parts = []
         for i, source in enumerate(sources):
+            validate_identifier(source, "source name")
             table_name = f"anno_{source}"
             alias = f"a{i}"
 
             fields = await self._get_source_fields_cached(source)
             for field in fields:
+                validate_identifier(field, "field name")
                 select_parts.append(f"{alias}.{field}")
 
             join = f"""
@@ -152,12 +155,14 @@ class VariantAnnotator:
             join_parts.append(join)
 
         where_parts = []
+        params: list = []
         if load_batch_id:
-            where_parts.append(f"v.load_batch_id = '{load_batch_id}'")
+            params.append(load_batch_id)
+            where_parts.append(f"v.load_batch_id = ${len(params)}")
 
         if filter_expr:
             sql_filter = self.expression_parser.parse(filter_expr, available_fields)
-            sql_filter = self._qualify_filter_fields(sql_filter, sources)
+            sql_filter = await self._qualify_filter_fields(sql_filter, sources)
             where_parts.append(f"({sql_filter})")
 
         query = f"""
@@ -170,9 +175,10 @@ class VariantAnnotator:
             query += f" WHERE {' AND '.join(where_parts)}"
 
         if limit:
-            query += f" LIMIT {limit}"
+            params.append(limit)
+            query += f" LIMIT ${len(params)}"
 
-        return query
+        return query, params
 
     async def _build_batch_annotation_query(
         self,
@@ -186,11 +192,13 @@ class VariantAnnotator:
 
         join_parts = []
         for i, source in enumerate(sources):
+            validate_identifier(source, "source name")
             table_name = f"anno_{source}"
             alias = f"a{i}"
 
             fields = await self._get_source_fields_cached(source)
             for field in fields:
+                validate_identifier(field, "field name")
                 select_parts.append(f"{alias}.{field}")
 
             join = f"""
@@ -210,7 +218,7 @@ class VariantAnnotator:
 
         if filter_expr:
             sql_filter = self.expression_parser.parse(filter_expr, available_fields)
-            sql_filter = self._qualify_filter_fields(sql_filter, sources)
+            sql_filter = await self._qualify_filter_fields(sql_filter, sources)
             query += f" WHERE {sql_filter}"
 
         return query
@@ -238,8 +246,27 @@ class VariantAnnotator:
 
         return temp_table
 
-    def _qualify_filter_fields(self, sql_filter: str, sources: list[str]) -> str:
+    async def _qualify_filter_fields(
+        self,
+        sql_filter: str,
+        sources: list[str],
+    ) -> str:
         """Add table aliases to field names in the filter expression."""
+        field_to_alias: dict[str, str] = {}
+        for i, source in enumerate(sources):
+            alias = f"a{i}"
+            fields = await self._get_source_fields_cached(source)
+            for field in fields:
+                if field not in field_to_alias:
+                    field_to_alias[field] = alias
+
+        for field, alias in sorted(field_to_alias.items(), key=lambda x: -len(x[0])):
+            sql_filter = re.sub(
+                rf'\b{re.escape(field)}\b',
+                f"{alias}.{field}",
+                sql_filter
+            )
+
         return sql_filter
 
 
