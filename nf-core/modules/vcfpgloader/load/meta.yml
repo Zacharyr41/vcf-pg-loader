@@ -1,21 +1,23 @@
 ---
 # yaml-language-server: $schema=https://raw.githubusercontent.com/nf-core/modules/master/modules/meta-schema.json
-name: "vcfpgloader_load"
-description: Load VCF files into PostgreSQL database with clinical-grade compliance
+name: "vcfpgloader"
+description: High-performance VCF to PostgreSQL loader using asyncpg for bulk variant ingestion
 keywords:
   - vcf
   - postgresql
   - database
   - variants
   - genomics
-  - loading
+  - clinical
+  - annotation
 tools:
-  - "vcfpgloader":
-      description: "High-performance VCF to PostgreSQL loader with clinical-grade compliance"
+  - "vcf-pg-loader":
+      description: "Async PostgreSQL VCF loader using cyvcf2 and asyncpg for 500K+ variants/second throughput"
       homepage: "https://github.com/Zacharyr41/vcf-pg-loader"
       documentation: "https://github.com/Zacharyr41/vcf-pg-loader#readme"
       tool_dev_url: "https://github.com/Zacharyr41/vcf-pg-loader"
       licence: ["MIT"]
+      identifier: ""
       args_id: "$args"
 
 input:
@@ -23,25 +25,59 @@ input:
         type: map
         description: |
           Groovy Map containing sample information
-          e.g. `[ id:'sample1' ]`
+          e.g. [ id:'sample1', family:'FAM001', affected:true ]
     - vcf:
         type: file
-        description: VCF file to load into PostgreSQL
+        description: Annotated VCF file containing variants to load
         pattern: "*.{vcf,vcf.gz}"
         ontologies:
-          - edam: http://edamontology.org/format_3016
+          - edam: "http://edamontology.org/format_3016"
+    - tbi:
+        type: file
+        description: Tabix index for the VCF file
+        pattern: "*.tbi"
+  - db_host:
+      type: string
+      description: PostgreSQL server hostname or IP address
+  - db_port:
+      type: integer
+      description: PostgreSQL server port (default 5432)
+  - db_name:
+      type: string
+      description: Target database name
+  - db_user:
+      type: string
+      description: Database username for authentication
+  - db_schema:
+      type: string
+      description: Target schema for variant tables (default public)
 
 output:
   - report:
-      - meta:
-          type: map
-          description: Groovy Map containing sample information
-      - "*.load_report.json":
-          type: file
-          description: JSON report with loading statistics
-          pattern: "*.load_report.json"
+      - - meta:
+            type: map
+            description: Sample information
+        - "*.load_report.json":
+            type: file
+            description: JSON report with loading statistics including variant counts, elapsed time, and throughput metrics
+            pattern: "*.load_report.json"
+  - log:
+      - - meta:
+            type: map
+            description: Sample information
+        - "*.load.log":
+            type: file
+            description: Detailed loading log with any warnings or errors
+            pattern: "*.load.log"
+  - row_count:
+      - - meta:
+            type: map
+            description: Sample information
+        - ROWS_LOADED:
+            type: integer
+            description: Number of variant records successfully loaded
   - versions:
-      - "versions.yml":
+      - versions.yml:
           type: file
           description: File containing software versions
           pattern: "versions.yml"

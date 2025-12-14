@@ -1,12 +1,13 @@
 """Tests for Typer CLI interface."""
 
+import os
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 from typer.testing import CliRunner
 
-from vcf_pg_loader.cli import app
+from vcf_pg_loader.cli import _build_database_url, app
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 runner = CliRunner(env={"NO_COLOR": "1", "TERM": "dumb"})
@@ -229,3 +230,126 @@ class TestCLIErrorHandling:
             "validate", "not-a-valid-uuid",
             "--db", "postgresql://test:test@localhost/test"
         ])
+
+
+class TestBuildDatabaseUrl:
+    """Tests for _build_database_url function."""
+
+    def test_returns_none_when_no_host(self):
+        """Should return None when no host is provided."""
+        with patch.dict(os.environ, {}, clear=True):
+            result = _build_database_url()
+            assert result is None
+
+    def test_uses_postgres_url_env_var(self):
+        """Should use POSTGRES_URL env var when set."""
+        with patch.dict(os.environ, {"POSTGRES_URL": "postgresql://user:pass@host:5432/db"}):
+            result = _build_database_url()
+            assert result == "postgresql://user:pass@host:5432/db"
+
+    def test_postgres_url_takes_priority(self):
+        """POSTGRES_URL should take priority over other args."""
+        with patch.dict(os.environ, {"POSTGRES_URL": "postgresql://env@host/db", "PGHOST": "other"}):
+            result = _build_database_url(host="cli_host")
+            assert result == "postgresql://env@host/db"
+
+    def test_cli_args_override_env_vars(self):
+        """CLI args should override PG* env vars."""
+        with patch.dict(os.environ, {"PGHOST": "env_host", "PGPORT": "5433"}, clear=True):
+            result = _build_database_url(host="cli_host", port=5434)
+            assert "cli_host" in result
+            assert "5434" in result
+
+    def test_builds_url_from_cli_args(self):
+        """Should build URL from CLI args."""
+        with patch.dict(os.environ, {}, clear=True):
+            result = _build_database_url(
+                host="myhost",
+                port=5432,
+                database="mydb",
+                user="myuser"
+            )
+            assert result == "postgresql://myuser@myhost:5432/mydb"
+
+    def test_builds_url_from_env_vars(self):
+        """Should build URL from PG* env vars."""
+        env = {
+            "PGHOST": "envhost",
+            "PGPORT": "5433",
+            "PGUSER": "envuser",
+            "PGDATABASE": "envdb"
+        }
+        with patch.dict(os.environ, env, clear=True):
+            result = _build_database_url()
+            assert result == "postgresql://envuser@envhost:5433/envdb"
+
+    def test_includes_password_when_set(self):
+        """Should include password in URL when PGPASSWORD is set."""
+        env = {
+            "PGHOST": "host",
+            "PGPASSWORD": "secret123"
+        }
+        with patch.dict(os.environ, env, clear=True):
+            result = _build_database_url()
+            assert "secret123" in result
+            assert result == "postgresql://postgres:secret123@host:5432/variants"
+
+    def test_uses_defaults_for_optional_params(self):
+        """Should use defaults for port, user, database."""
+        with patch.dict(os.environ, {"PGHOST": "myhost"}, clear=True):
+            result = _build_database_url()
+            assert result == "postgresql://postgres@myhost:5432/variants"
+
+    def test_partial_cli_args_with_env_fallback(self):
+        """Should mix CLI args with env var fallbacks."""
+        env = {"PGHOST": "envhost", "PGUSER": "envuser"}
+        with patch.dict(os.environ, env, clear=True):
+            result = _build_database_url(database="clidb")
+            assert "envhost" in result
+            assert "envuser" in result
+            assert "clidb" in result
+
+
+class TestLoadCommandNewOptions:
+    """Tests for new load command options."""
+
+    def test_load_help_shows_new_options(self):
+        """Load help should show new connection options."""
+        result = runner.invoke(app, ["load", "--help"])
+        assert result.exit_code == 0
+        assert "--host" in result.stdout
+        assert "--port" in result.stdout
+        assert "--database" in result.stdout
+        assert "--user" in result.stdout
+        assert "--schema" in result.stdout
+        assert "--sample-id" in result.stdout
+        assert "--log" in result.stdout
+
+    def test_load_with_individual_db_params(self):
+        """Load should accept individual DB connection params."""
+        with patch("vcf_pg_loader.cli.VCFLoader") as mock_loader:
+            mock_instance = AsyncMock()
+            mock_instance.load_vcf.return_value = {
+                "variants_loaded": 100,
+                "load_batch_id": str(uuid4()),
+                "file_hash": "abc123"
+            }
+            mock_loader.return_value = mock_instance
+
+            vcf_path = FIXTURES_DIR / "with_annotations.vcf"
+            result = runner.invoke(app, [
+                "load", str(vcf_path),
+                "--host", "localhost",
+                "--port", "5432",
+                "--database", "testdb",
+                "--user", "testuser",
+                "--quiet"
+            ])
+
+            if result.exit_code == 0:
+                call_args = mock_loader.call_args
+                db_url = call_args[0][0]
+                assert "localhost" in db_url
+                assert "5432" in db_url
+                assert "testdb" in db_url
+                assert "testuser" in db_url

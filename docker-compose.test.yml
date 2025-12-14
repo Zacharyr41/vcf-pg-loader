@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: vcf-pg-test-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: vcf_test
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./tests/sql/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+      - ./tests/sql/schema.sql:/docker-entrypoint-initdb.d/02-schema.sql
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d vcf_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    command: >
+      postgres
+        -c shared_buffers=256MB
+        -c work_mem=64MB
+        -c maintenance_work_mem=256MB
+        -c max_wal_size=1GB
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: vcf-pg-admin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@test.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "8080:80"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:

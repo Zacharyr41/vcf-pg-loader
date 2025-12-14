@@ -30,8 +30,7 @@ def version_callback(value: bool) -> None:
 
 
 app = typer.Typer(
-    name="vcf-pg-loader",
-    help="Load VCF files into PostgreSQL with clinical-grade compliance"
+    name="vcf-pg-loader", help="Load VCF files into PostgreSQL with clinical-grade compliance"
 )
 console = Console()
 
@@ -40,7 +39,9 @@ console = Console()
 def main_callback(
     version: Annotated[
         bool | None,
-        typer.Option("--version", callback=version_callback, is_eager=True, help="Show version and exit")
+        typer.Option(
+            "--version", callback=version_callback, is_eager=True, help="Show version and exit"
+        ),
     ] = None,
 ) -> None:
     pass
@@ -58,41 +59,63 @@ def setup_logging(verbose: bool, quiet: bool) -> None:
     logging.basicConfig(
         level=level,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        datefmt="%H:%M:%S"
+        datefmt="%H:%M:%S",
     )
     logging.getLogger("vcf_pg_loader").setLevel(level)
 
 
-def _get_database_url_from_env() -> str | None:
-    """Build database URL from environment variables.
+def _build_database_url(
+    host: str | None = None,
+    port: int | None = None,
+    database: str | None = None,
+    user: str | None = None,
+) -> str | None:
+    """Build database URL from individual connection parameters.
 
-    Supports:
-        - POSTGRES_URL: Full connection URL (highest priority)
-        - Individual vars: PGHOST, PGPORT, PGUSER, PGPASSWORD, PGDATABASE
+    Priority (highest to lowest):
+        1. POSTGRES_URL environment variable
+        2. Provided CLI arguments
+        3. PG* environment variables
     """
     if url := os.environ.get("POSTGRES_URL"):
         return url
 
-    host = os.environ.get("PGHOST")
-    if not host:
+    resolved_host = host or os.environ.get("PGHOST")
+    if not resolved_host:
         return None
 
-    port = os.environ.get("PGPORT", "5432")
-    user = os.environ.get("PGUSER", "postgres")
+    resolved_port = port or int(os.environ.get("PGPORT", "5432"))
+    resolved_user = user or os.environ.get("PGUSER", "postgres")
+    resolved_database = database or os.environ.get("PGDATABASE", "variants")
     password = os.environ.get("PGPASSWORD", "")
-    database = os.environ.get("PGDATABASE", "variants")
 
     if password:
-        return f"postgresql://{user}:{password}@{host}:{port}/{database}"
-    return f"postgresql://{user}@{host}:{port}/{database}"
+        return f"postgresql://{resolved_user}:{password}@{resolved_host}:{resolved_port}/{resolved_database}"
+    return f"postgresql://{resolved_user}@{resolved_host}:{resolved_port}/{resolved_database}"
 
 
-def _resolve_database_url(db_url: str | None, quiet: bool) -> str | None:
+def _get_database_url_from_env() -> str | None:
+    """Build database URL from environment variables (legacy helper)."""
+    return _build_database_url()
+
+
+def _resolve_database_url(
+    db_url: str | None,
+    quiet: bool,
+    host: str | None = None,
+    port: int | None = None,
+    database: str | None = None,
+    user: str | None = None,
+) -> str | None:
     """Resolve database URL, using managed database if needed.
 
     Args:
         db_url: User-provided URL, 'auto', or None.
         quiet: Whether to suppress output.
+        host: PostgreSQL host (CLI arg).
+        port: PostgreSQL port (CLI arg).
+        database: Database name (CLI arg).
+        user: Database user (CLI arg).
 
     Returns:
         Resolved database URL, or None if failed.
@@ -103,10 +126,10 @@ def _resolve_database_url(db_url: str | None, quiet: bool) -> str | None:
     if db_url is not None and db_url.lower() != "auto":
         return db_url
 
-    if env_url := _get_database_url_from_env():
+    if built_url := _build_database_url(host, port, database, user):
         if not quiet:
-            console.print("[dim]Using database from environment variables[/dim]")
-        return env_url
+            console.print("[dim]Using database from CLI args/environment variables[/dim]")
+        return built_url
 
     try:
         db = ManagedDatabase()
@@ -127,6 +150,7 @@ def _resolve_database_url(db_url: str | None, quiet: bool) -> str | None:
 
         async def init_schema():
             import asyncpg
+
             conn = await asyncpg.connect(url)
             try:
                 schema_manager = SchemaManager(human_genome=True)
@@ -147,18 +171,37 @@ def _resolve_database_url(db_url: str | None, quiet: bool) -> str | None:
 @app.command()
 def load(
     vcf_path: Path = typer.Argument(..., help="Path to VCF file (.vcf, .vcf.gz)"),
-    db_url: Annotated[str | None, typer.Option(
-        "--db", "-d",
-        help="PostgreSQL URL ('auto' for managed DB, omit to auto-detect)"
-    )] = None,
+    db_url: Annotated[
+        str | None,
+        typer.Option(
+            "--db", "-d", help="PostgreSQL URL ('auto' for managed DB, omit to auto-detect)"
+        ),
+    ] = None,
+    host: Annotated[str | None, typer.Option("--host", help="PostgreSQL host")] = None,
+    port: Annotated[int | None, typer.Option("--port", help="PostgreSQL port")] = None,
+    database: Annotated[str | None, typer.Option("--database", help="Database name")] = None,
+    user: Annotated[str | None, typer.Option("--user", help="Database user")] = None,
+    schema: Annotated[str, typer.Option("--schema", help="Target schema")] = "public",
+    sample_id: Annotated[str | None, typer.Option("--sample-id", help="Sample ID override")] = None,
     batch_size: int = typer.Option(50000, "--batch", "-b", help="Records per batch"),
     workers: int = typer.Option(8, "--workers", "-w", help="Parallel workers"),
     normalize: bool = typer.Option(True, "--normalize/--no-normalize", help="Normalize variants"),
-    drop_indexes: bool = typer.Option(True, "--drop-indexes/--keep-indexes", help="Drop indexes during load"),
-    human_genome: bool = typer.Option(True, "--human-genome/--no-human-genome", help="Use human chromosome enum type"),
-    force: bool = typer.Option(False, "--force", "-f", help="Force reload even if file was already loaded"),
-    config_file: Annotated[Path | None, typer.Option("--config", "-c", help="TOML configuration file")] = None,
-    report: Annotated[Path | None, typer.Option("--report", "-r", help="Write JSON report to file")] = None,
+    drop_indexes: bool = typer.Option(
+        True, "--drop-indexes/--keep-indexes", help="Drop indexes during load"
+    ),
+    human_genome: bool = typer.Option(
+        True, "--human-genome/--no-human-genome", help="Use human chromosome enum type"
+    ),
+    force: bool = typer.Option(
+        False, "--force", "-f", help="Force reload even if file was already loaded"
+    ),
+    config_file: Annotated[
+        Path | None, typer.Option("--config", "-c", help="TOML configuration file")
+    ] = None,
+    report: Annotated[
+        Path | None, typer.Option("--report", "-r", help="Write JSON report to file")
+    ] = None,
+    log_file: Annotated[Path | None, typer.Option("--log", help="Write log to file")] = None,
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable verbose logging"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
     progress: bool = typer.Option(True, "--progress/--no-progress", help="Show progress bar"),
@@ -167,6 +210,7 @@ def load(
 
     If --db is not specified, uses the managed database (auto-starts if needed).
     Use --db auto to explicitly use managed database, or provide a PostgreSQL URL.
+    Can also specify connection via --host, --port, --database, --user options.
     """
     setup_logging(verbose, quiet)
 
@@ -174,9 +218,18 @@ def load(
         console.print(f"[red]Error: VCF file not found: {vcf_path}[/red]")
         raise typer.Exit(1)
 
-    resolved_db_url = _resolve_database_url(db_url, quiet)
+    resolved_db_url = _resolve_database_url(db_url, quiet, host, port, database, user)
     if resolved_db_url is None:
         raise typer.Exit(1)
+
+    if log_file:
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setFormatter(
+            logging.Formatter(
+                "%(asctime)s - %(name)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+            )
+        )
+        logging.getLogger("vcf_pg_loader").addHandler(file_handler)
 
     if config_file:
         base_config = load_config(config_file)
@@ -215,7 +268,9 @@ def load(
                 task = progress_bar.add_task("Loading variants...", total=None)
 
                 def update_progress(batch_num: int, batch_size: int, total: int):
-                    progress_bar.update(task, completed=total, description=f"Loaded {total:,} variants")
+                    progress_bar.update(
+                        task, completed=total, description=f"Loaded {total:,} variants"
+                    )
 
                 config.progress_callback = update_progress
                 result = asyncio.run(loader.load_vcf(vcf_path, force_reload=force))
@@ -249,9 +304,12 @@ def load(
         if report:
             import json
             import time
+
             report_data["elapsed_seconds"] = result.get("elapsed_seconds", 0)
             report_data["vcf_file"] = str(vcf_path)
             report_data["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            report_data["sample_id"] = sample_id or vcf_path.stem
+            report_data["schema"] = schema
             with open(report, "w") as f:
                 json.dump(report_data, f, indent=2)
                 f.write("\n")
@@ -270,9 +328,7 @@ def load(
 def validate(
     load_batch_id: str = typer.Argument(..., help="Load batch UUID to validate"),
     db_url: str = typer.Option(
-        "postgresql://localhost/variants",
-        "--db", "-d",
-        help="PostgreSQL connection URL"
+        "postgresql://localhost/variants", "--db", "-d", help="PostgreSQL connection URL"
     ),
 ) -> None:
     """Validate a completed load."""
@@ -287,8 +343,7 @@ def validate(
 
         try:
             audit = await conn.fetchrow(
-                "SELECT * FROM variant_load_audit WHERE load_batch_id = $1",
-                batch_uuid
+                "SELECT * FROM variant_load_audit WHERE load_batch_id = $1", batch_uuid
             )
 
             if not audit:
@@ -296,17 +351,19 @@ def validate(
                 raise typer.Exit(1)
 
             actual_count = await conn.fetchval(
-                "SELECT COUNT(*) FROM variants WHERE load_batch_id = $1",
-                batch_uuid
+                "SELECT COUNT(*) FROM variants WHERE load_batch_id = $1", batch_uuid
             )
 
-            duplicates = await conn.fetchval("""
+            duplicates = await conn.fetchval(
+                """
                 SELECT COUNT(*) FROM (
                     SELECT chrom, pos, ref, alt, COUNT(*)
                     FROM variants WHERE load_batch_id = $1
                     GROUP BY chrom, pos, ref, alt HAVING COUNT(*) > 1
                 ) dupes
-            """, batch_uuid)
+            """,
+                batch_uuid,
+            )
 
             console.print(f"Load Batch: {load_batch_id}")
             console.print(f"Status: {audit['status']}")
@@ -335,13 +392,14 @@ def validate(
 @app.command("init-db")
 def init_db(
     db_url: str = typer.Option(
-        "postgresql://localhost/variants",
-        "--db", "-d",
-        help="PostgreSQL connection URL"
+        "postgresql://localhost/variants", "--db", "-d", help="PostgreSQL connection URL"
     ),
-    human_genome: bool = typer.Option(True, "--human-genome/--no-human-genome", help="Use human chromosome enum type"),
+    human_genome: bool = typer.Option(
+        True, "--human-genome/--no-human-genome", help="Use human chromosome enum type"
+    ),
 ) -> None:
     """Initialize database schema."""
+
     async def run_init() -> None:
         conn = await asyncpg.connect(db_url)
 
@@ -364,13 +422,27 @@ def init_db(
 @app.command()
 def benchmark(
     vcf_path: Annotated[Path | None, typer.Option("--vcf", "-f", help="Path to VCF file")] = None,
-    synthetic: Annotated[int | None, typer.Option("--synthetic", "-s", help="Generate synthetic VCF with N variants")] = None,
-    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL (omit for parsing-only benchmark)")] = None,
+    synthetic: Annotated[
+        int | None, typer.Option("--synthetic", "-s", help="Generate synthetic VCF with N variants")
+    ] = None,
+    db_url: Annotated[
+        str | None,
+        typer.Option("--db", "-d", help="PostgreSQL URL (omit for parsing-only benchmark)"),
+    ] = None,
     batch_size: int = typer.Option(50000, "--batch", "-b", help="Records per batch"),
     normalize: bool = typer.Option(True, "--normalize/--no-normalize", help="Normalize variants"),
-    human_genome: bool = typer.Option(True, "--human-genome/--no-human-genome", help="Use human chromosome enum type"),
-    realistic: bool = typer.Option(False, "--realistic", "-r", help="Generate realistic VCF with annotations and complex variants"),
-    giab: bool = typer.Option(False, "--giab", "-g", help="Generate GIAB-style VCF with platform/callset metadata"),
+    human_genome: bool = typer.Option(
+        True, "--human-genome/--no-human-genome", help="Use human chromosome enum type"
+    ),
+    realistic: bool = typer.Option(
+        False,
+        "--realistic",
+        "-r",
+        help="Generate realistic VCF with annotations and complex variants",
+    ),
+    giab: bool = typer.Option(
+        False, "--giab", "-g", help="Generate GIAB-style VCF with platform/callset metadata"
+    ),
     json_output: bool = typer.Option(False, "--json", help="Output results as JSON"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Minimal output"),
 ) -> None:
@@ -446,12 +518,23 @@ def benchmark(
 @app.command("load-annotation")
 def load_annotation(
     vcf_path: Path = typer.Argument(..., help="Path to annotation VCF file (.vcf, .vcf.gz)"),
-    name: Annotated[str | None, typer.Option("--name", "-n", help="Name for this annotation source")] = None,
-    config_file: Annotated[Path | None, typer.Option("--config", "-c", help="JSON field configuration file")] = None,
+    name: Annotated[
+        str | None, typer.Option("--name", "-n", help="Name for this annotation source")
+    ] = None,
+    config_file: Annotated[
+        Path | None, typer.Option("--config", "-c", help="JSON field configuration file")
+    ] = None,
     db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
-    version: Annotated[str | None, typer.Option("--version", "-v", help="Version string for this source")] = None,
-    source_type: Annotated[str | None, typer.Option("--type", "-t", help="Source type (population, pathogenicity, etc.)")] = None,
-    human_genome: bool = typer.Option(True, "--human-genome/--no-human-genome", help="Use human chromosome enum type"),
+    version: Annotated[
+        str | None, typer.Option("--version", "-v", help="Version string for this source")
+    ] = None,
+    source_type: Annotated[
+        str | None,
+        typer.Option("--type", "-t", help="Source type (population, pathogenicity, etc.)"),
+    ] = None,
+    human_genome: bool = typer.Option(
+        True, "--human-genome/--no-human-genome", help="Use human chromosome enum type"
+    ),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
 ) -> None:
     """Load an annotation VCF file as a reference database.
@@ -550,9 +633,9 @@ def list_annotations(
         elif sources:
             for source in sources:
                 console.print(f"[cyan]{source['name']}[/cyan]")
-                if source.get('version'):
+                if source.get("version"):
                     console.print(f"  Version: {source['version']}")
-                if source.get('source_type'):
+                if source.get("source_type"):
                     console.print(f"  Type: {source['source_type']}")
                 console.print(f"  Variants: {source.get('variant_count', 0):,}")
                 console.print()
@@ -567,11 +650,17 @@ def list_annotations(
 @app.command("annotate")
 def annotate(
     batch_id: str = typer.Argument(..., help="Load batch ID of variants to annotate"),
-    source: Annotated[list[str] | None, typer.Option("--source", "-s", help="Annotation source(s) to use")] = None,
-    filter_expr: Annotated[str | None, typer.Option("--filter", "-f", help="Filter expression (echtvar-style)")] = None,
+    source: Annotated[
+        list[str] | None, typer.Option("--source", "-s", help="Annotation source(s) to use")
+    ] = None,
+    filter_expr: Annotated[
+        str | None, typer.Option("--filter", "-f", help="Filter expression (echtvar-style)")
+    ] = None,
     output: Annotated[Path | None, typer.Option("--output", "-o", help="Output file path")] = None,
     format: Annotated[str, typer.Option("--format", help="Output format (tsv, json)")] = "tsv",
-    limit: Annotated[int | None, typer.Option("--limit", "-l", help="Limit number of results")] = None,
+    limit: Annotated[
+        int | None, typer.Option("--limit", "-l", help="Limit number of results")
+    ] = None,
     db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
 ) -> None:
@@ -633,7 +722,9 @@ def annotate(
                     writer.writerows(results)
 
             if not quiet and output:
-                console.print(f"[green]✓[/green] Wrote {len(results)} annotated variants to {output}")
+                console.print(
+                    f"[green]✓[/green] Wrote {len(results)} annotated variants to {output}"
+                )
         finally:
             if output:
                 out_file.close()
@@ -814,7 +905,17 @@ def db_shell() -> None:
 
         console.print(f"Connecting to {DEFAULT_DATABASE}...")
         subprocess.run(
-            ["docker", "exec", "-it", CONTAINER_NAME, "psql", "-U", DEFAULT_USER, "-d", DEFAULT_DATABASE],
+            [
+                "docker",
+                "exec",
+                "-it",
+                CONTAINER_NAME,
+                "psql",
+                "-U",
+                DEFAULT_USER,
+                "-d",
+                DEFAULT_DATABASE,
+            ],
             check=True,
         )
 
