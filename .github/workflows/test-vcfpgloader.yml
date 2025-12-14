@@ -23,6 +23,10 @@ jobs:
           curl -fsSL https://get.nf-test.com | bash
           sudo mv nf-test /usr/local/bin/
 
+      - name: Set Nextflow secrets
+        run: |
+          nextflow secrets set PGPASSWORD "${{ secrets.PGPASSWORD }}"
+
       - name: Run stub tests
         run: |
           cd nf-core/modules/vcfpgloader/load
