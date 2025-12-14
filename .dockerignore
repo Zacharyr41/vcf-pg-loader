@@ -12,6 +12,7 @@ build/
 .venv/
 venv/
 *.md
+!README.md
 tests/
 docs/
 .github/

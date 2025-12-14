@@ -1,0 +1,12 @@
+---
+# yaml-language-server: $schema=https://raw.githubusercontent.com/nf-core/modules/master/modules/environment-schema.json
+name: vcfpgloader
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - conda-forge::python=3.12
+  - bioconda::cyvcf2=0.31.0
+  - conda-forge::asyncpg=0.29.0
+  - conda-forge::numpy>=1.24
+  - conda-forge::jq=1.7
