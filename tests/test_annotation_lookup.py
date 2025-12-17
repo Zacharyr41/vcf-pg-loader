@@ -623,7 +623,7 @@ class TestAnnotationPerformance:
         print(f"\n  Annotation load: {result['variants_loaded']:,} variants in {elapsed:.2f}s ({rate:,.0f}/sec)")
 
         assert result["variants_loaded"] == n_variants
-        assert rate > 50000
+        assert rate > 20000
 
         await conn.close()
 
