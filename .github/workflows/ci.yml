@@ -254,3 +254,17 @@ jobs:
         run: |
           echo "=== GIAB Benchmark Complete ==="
           echo "Tests validate parsing accuracy and throughput against real GIAB data"
+
+  test:
+    runs-on: ubuntu-latest
+    needs: [lint, test-unit, test-integration, test-e2e]
+    if: always()
+    steps:
+      - name: Check results
+        run: |
+          if [[ "${{ needs.lint.result }}" != "success" ]] || \
+             [[ "${{ needs.test-unit.result }}" != "success" ]] || \
+             [[ "${{ needs.test-integration.result }}" != "success" ]] || \
+             [[ "${{ needs.test-e2e.result }}" != "success" ]]; then
+            exit 1
+          fi
