@@ -1,5 +1,8 @@
 # vcf-pg-loader
 
+[![install with bioconda](https://img.shields.io/badge/install%20with-bioconda-brightgreen.svg?style=flat)](http://bioconda.github.io/recipes/vcf-pg-loader/README.html)
+[![PyPI version](https://badge.fury.io/py/vcf-pg-loader.svg)](https://badge.fury.io/py/vcf-pg-loader)
+
 High-performance VCF to PostgreSQL loader with clinical-grade compliance.
 
 ## Features
@@ -21,7 +24,19 @@ High-performance VCF to PostgreSQL loader with clinical-grade compliance.
 
 ## Installation
 
-### Quick Install (Recommended)
+### Bioconda (Recommended)
+
+```bash
+conda install -c conda-forge -c bioconda vcf-pg-loader
+```
+
+### PyPI
+
+```bash
+pip install vcf-pg-loader
+```
+
+### Quick Install Script
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Zacharyr41/vcf-pg-loader/main/install.sh | bash
@@ -29,16 +44,9 @@ curl -fsSL https://raw.githubusercontent.com/Zacharyr41/vcf-pg-loader/main/insta
 
 This installs vcf-pg-loader and all dependencies (Python, Docker) automatically.
 
-### Manual Installation
+### From Source
 
 ```bash
-# From PyPI (when published)
-pip install vcf-pg-loader
-
-# From TestPyPI (current)
-pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ vcf-pg-loader
-
-# For development
 git clone https://github.com/Zacharyr41/vcf-pg-loader.git
 cd vcf-pg-loader
 uv pip install -e ".[dev]"
