@@ -240,9 +240,9 @@ Sleep 35s
 Enter
 Sleep 40s
 
-# Slide 45: Load the Data (~40 words)
+# Slide 45: Load the Data (~120 words - expanded with timing details)
 Enter
-Sleep 20s
+Sleep 55s
 
 # Slide 46: Query for Candidates (~60 words)
 Enter
