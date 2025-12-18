@@ -114,7 +114,15 @@ FILTER tells you if the variant passed quality checks. "PASS" means yes. Anythin
 
 The **INFO column** is where variant-level annotations live. It's a semicolon-separated list of key-value pairs.
 
-AC is allele count—how many chromosomes carry this variant. AF is allele frequency. DP is depth—how many reads covered this position. These fields are defined in the header and vary by variant caller.
+AC is allele count—how many chromosomes carry this variant. AF is allele frequency.
+
+DP is depth—and this one's important. Remember those short reads from the sequencing machine? DP=30 means 30 of those reads happened to overlap this exact position in the genome.
+
+Why does that matter? More reads means more confidence. If only 2 reads covered a position and one says A, one says G—is that a real variant or just sequencing error? Hard to tell. But if 30 reads cover it and 15 say A, 15 say G? That's a solid heterozygous call.
+
+Think of it like witnesses to an event. One witness? Unreliable. Thirty witnesses agreeing on the details? Much more credible.
+
+These INFO fields are defined in the header and vary by variant caller.
 
 **[Slide 12: FORMAT & SAMPLE]**
 
