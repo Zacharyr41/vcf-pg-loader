@@ -9,7 +9,7 @@ from ..components.diagrams import (
 from ..components.vcf_snippets import (
     genotype_table,
     impact_table,
-    info_number_table,
+    info_number_panel,
     rare_disease_filters_table,
     variant_types_table,
     vcf_column_chrom_pos_panel,
@@ -173,7 +173,7 @@ def add_section_2(p: Presenter) -> None:
 
     p.slide(
         "INFO Field Numbers",
-        info_number_table,
+        info_number_panel,
     )
 
     p.slide(

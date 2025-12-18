@@ -281,6 +281,68 @@ def info_number_table() -> Table:
     return table
 
 
+def info_number_panel() -> Group:
+    header_example = Text()
+    header_example.append("##INFO=<ID=", style="dim")
+    header_example.append("DP", style="bold cyan")
+    header_example.append(",", style="dim")
+    header_example.append("Number=1", style="bold yellow")
+    header_example.append(',Type=Integer,Description="Read depth">\n', style="dim")
+
+    header_example.append("##INFO=<ID=", style="dim")
+    header_example.append("AC", style="bold cyan")
+    header_example.append(",", style="dim")
+    header_example.append("Number=A", style="bold yellow")
+    header_example.append(',Type=Integer,Description="Allele count">\n', style="dim")
+
+    header_example.append("##INFO=<ID=", style="dim")
+    header_example.append("AD", style="bold cyan")
+    header_example.append(",", style="dim")
+    header_example.append("Number=R", style="bold yellow")
+    header_example.append(',Type=Integer,Description="Allelic depths">\n', style="dim")
+
+    header_example.append("##FORMAT=<ID=", style="dim")
+    header_example.append("PL", style="bold cyan")
+    header_example.append(",", style="dim")
+    header_example.append("Number=G", style="bold yellow")
+    header_example.append(',Type=Integer,Description="Phred-scaled likelihoods">', style="dim")
+
+    data_example = Text()
+    data_example.append("#CHROM  POS    ID  REF  ALT    ...  INFO\n", style="dim")
+    data_example.append("chr7    12345  .   A    ", style="dim")
+    data_example.append("G,T", style="bold magenta")
+    data_example.append("    ...  ", style="dim")
+    data_example.append("DP=50", style="bold green")
+    data_example.append(";", style="dim")
+    data_example.append("AC=10,5", style="bold green")
+    data_example.append(";", style="dim")
+    data_example.append("AD=30,10,5", style="bold green")
+
+    table = Table(title="Number Specification Guide", border_style="magenta", show_header=True)
+    table.add_column("Number", style="bold yellow", justify="center")
+    table.add_column("Meaning", style="white")
+    table.add_column("Values for G,T site", style="green")
+
+    table.add_row("1", "Exactly one value", "DP=50 (one depth)")
+    table.add_row("A", "One per ALT allele", "AC=10,5 (G count, T count)")
+    table.add_row("R", "One per allele (REF+ALTs)", "AD=30,10,5 (A, G, T depths)")
+    table.add_row("G", "One per genotype", "PL=... (0/0, 0/1, 1/1, 0/2, 1/2, 2/2)")
+
+    return Group(
+        Panel(
+            header_example, title="[bold]VCF Header — Field Definitions[/bold]", border_style="cyan"
+        ),
+        Text(""),
+        Panel(
+            data_example,
+            title="[bold]Data Line — Multi-allelic Site (2 ALTs: G and T)[/bold]",
+            border_style="green",
+        ),
+        Text(""),
+        table,
+    )
+
+
 def genotype_table() -> Table:
     table = Table(title="Genotype Notation", border_style="yellow")
     table.add_column("Genotype", style="bold cyan")
