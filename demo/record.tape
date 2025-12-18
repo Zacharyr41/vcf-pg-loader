@@ -46,7 +46,7 @@ Sleep 8s
 Enter
 Sleep 25s
 Enter
-Sleep 8s
+Sleep 20s
 Enter
 Sleep 8s
 

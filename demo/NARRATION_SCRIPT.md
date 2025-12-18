@@ -48,11 +48,21 @@ Here's how we get from a patient sample to a VCF file. Follow the numbers on the
 
 **[Slide 3: Why VCF?]**
 
-Now, why does this format matter?
+Now, why does this format matter? Why not just work with the full genome?
 
 A full genome takes about 100 gigabytes. A VCF file? Maybe 100 to 500 megabytes. That's a **200x** reduction.
 
-And it's standardized. Every major sequencing center, every research hospital, every diagnostic lab—they all speak VCF.
+And that difference changes everything.
+
+**Storage**: You can keep thousands of VCF files on a single hard drive. Try that with raw genomes and you need a data center.
+
+**Speed**: Loading a VCF takes seconds. Loading a full genome? Minutes to hours. When you're iterating on analysis, that matters.
+
+**Accessibility**: A researcher with a laptop can work with VCF files. No cluster required. No cloud bill. Just open it and start querying.
+
+**Transfer**: Sending a VCF to a collaborator takes minutes. Sending a full genome? Better start that upload before lunch.
+
+And it's standardized. Every major sequencing center, every research hospital, every diagnostic lab—they all speak VCF. Your analysis pipeline works everywhere.
 
 **[Slide 4: Reference vs Sample]**
 
