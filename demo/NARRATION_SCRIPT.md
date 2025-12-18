@@ -30,11 +30,21 @@ Think of it like this: instead of copying an entire book, you just note the typo
 
 **[Slide 2: The Journey]**
 
-Here's how we get from a patient sample to a VCF file.
+Here's how we get from a patient sample to a VCF file. Follow the numbers on the diagram.
 
-DNA goes into a sequencing machine. Out comes raw data—billions of short reads. Those reads get aligned to the human reference genome. And then variant calling software identifies every position where this person's DNA differs from the reference.
+**Step ①**: It starts with a DNA sample—usually blood or tissue from the patient.
 
-The output? A VCF file.
+**Step ②**: That sample goes into a sequencing machine. Illumina, PacBio, whatever technology. The machine reads millions of short fragments of DNA.
+
+**Step ③**: Out comes a FASTQ file—billions of short reads, each about 150 base pairs long.
+
+**Step ④**: Next, alignment. Software like BWA takes each read and figures out where it came from in the human reference genome.
+
+**Step ⑤**: The result is a BAM or CRAM file—all those reads, now sorted and indexed by their position.
+
+**Step ⑥**: Then variant calling. Software like GATK compares the aligned reads to the reference and identifies every position where this person's DNA is **different**.
+
+**Step ⑦**: And finally, the output: a VCF file. Every variant, catalogued and ready for analysis.
 
 **[Slide 3: Why VCF?]**
 

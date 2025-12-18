@@ -2,47 +2,47 @@ from rich.panel import Panel
 from rich.text import Text
 
 DNA_SEQUENCING_FLOW = """
-    ┌─────────────────┐
-    │   DNA Sample    │
-    │   (Patient)     │
-    └────────┬────────┘
-             │
-             ▼
-    ┌─────────────────┐
-    │   Sequencing    │
-    │   (Illumina,    │
-    │    PacBio, etc) │
-    └────────┬────────┘
-             │
-             ▼
-    ┌─────────────────┐
-    │   FASTQ Files   │
-    │   (Raw reads)   │
-    └────────┬────────┘
-             │
-             ▼
-    ┌─────────────────┐
-    │   Alignment     │
-    │   (BWA, etc)    │
-    └────────┬────────┘
-             │
-             ▼
-    ┌─────────────────┐
-    │   BAM/CRAM      │
-    │   (Aligned)     │
-    └────────┬────────┘
-             │
-             ▼
-    ┌─────────────────┐
-    │  Variant Call   │
-    │  (GATK, etc)    │
-    └────────┬────────┘
-             │
-             ▼
-    ┌─────────────────┐
-    │    VCF File     │
-    │   (Variants)    │
-    └─────────────────┘
+        ┌─────────────────┐
+   [bold cyan]①[/bold cyan]  │   DNA Sample    │    [dim]Patient blood or tissue sample[/dim]
+        │   (Patient)     │
+        └────────┬────────┘
+                 │
+                 ▼
+        ┌─────────────────┐
+   [bold cyan]②[/bold cyan]  │   Sequencing    │    [dim]Machines read DNA fragments[/dim]
+        │   (Illumina,    │
+        │    PacBio, etc) │
+        └────────┬────────┘
+                 │
+                 ▼
+        ┌─────────────────┐
+   [bold cyan]③[/bold cyan]  │   FASTQ Files   │    [dim]Billions of short reads[/dim]
+        │   (Raw reads)   │
+        └────────┬────────┘
+                 │
+                 ▼
+        ┌─────────────────┐
+   [bold cyan]④[/bold cyan]  │   Alignment     │    [dim]Map reads to reference genome[/dim]
+        │   (BWA, etc)    │
+        └────────┬────────┘
+                 │
+                 ▼
+        ┌─────────────────┐
+   [bold cyan]⑤[/bold cyan]  │   BAM/CRAM      │    [dim]Sorted, indexed alignments[/dim]
+        │   (Aligned)     │
+        └────────┬────────┘
+                 │
+                 ▼
+        ┌─────────────────┐
+   [bold cyan]⑥[/bold cyan]  │  Variant Call   │    [dim]Find differences from reference[/dim]
+        │  (GATK, etc)    │
+        └────────┬────────┘
+                 │
+                 ▼
+        ┌─────────────────┐
+   [bold green]⑦[/bold green]  │    VCF File     │    [dim]Final output: all variants[/dim]
+        │   (Variants)    │
+        └─────────────────┘
 """
 
 REFERENCE_VS_SAMPLE = """
@@ -194,8 +194,9 @@ VECTOR_EMBEDDING_FUTURE = """
 
 
 def sequencing_flow_panel() -> Panel:
+    text = Text.from_markup(DNA_SEQUENCING_FLOW)
     return Panel(
-        DNA_SEQUENCING_FLOW,
+        text,
         title="[bold]DNA to VCF Pipeline[/bold]",
         border_style="cyan",
     )
