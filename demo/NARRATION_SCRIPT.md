@@ -402,7 +402,13 @@ Each query type is just SQL. Different WHERE clauses, different JOIN conditions.
 
 **[Slide 45: Load the Data]**
 
-Let me show you the actual commands. Load proband, mother, father. Each gets a sample ID so you can identify them in queries later. That's it—three commands and your data is ready.
+Let me show you the actual commands. Load proband, mother, father. Each gets a sample ID so you can identify them in queries later.
+
+How long does this take? A typical exome has about 50,000 to 100,000 variants. At 100,000 variants per second, that's under a second of actual loading time—plus a few seconds of overhead for connection and schema setup. Call it 5-10 seconds per sample.
+
+A whole genome is bigger—4 to 6 million variants. That takes about 45 seconds to a minute per sample. Still fast enough that you can load a trio during a coffee break.
+
+What's the end result? Every variant from all three VCFs is now in PostgreSQL, normalized, indexed, and queryable. Each row has the sample ID, chromosome, position, REF, ALT, all the INFO fields, all the FORMAT fields. Ready for SQL.
 
 **[Slide 46: Query for Candidates]**
 
