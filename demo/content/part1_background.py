@@ -48,18 +48,20 @@ def add_section_1(p: Presenter) -> None:
         "Why VCF?",
         lambda: Panel(
             Text.from_markup(
-                "[bold yellow]Efficiency (200x smaller):[/bold yellow]\n"
-                "  • Full genome: ~100 GB\n"
-                "  • VCF file: ~100-500 MB\n\n"
-                "[bold yellow]Practical Benefits:[/bold yellow]\n"
-                "  • [cyan]Storage[/cyan]: Thousands of samples on one drive\n"
-                "  • [cyan]Speed[/cyan]: Load in seconds, not hours\n"
-                "  • [cyan]Accessibility[/cyan]: Works on a laptop, no cluster needed\n"
-                "  • [cyan]Transfer[/cyan]: Share with collaborators in minutes\n\n"
-                "[bold yellow]Standardization (GA4GH):[/bold yellow]\n"
-                "  • Global Alliance for Genomics and Health\n"
-                "  • 600+ member organizations worldwide\n"
-                "  • Same format: Broad Institute ↔ UK Biobank ↔ Tokyo"
+                "[bold yellow]200x Smaller[/bold yellow]\n"
+                "  Full genome: [dim]~100 GB[/dim]  →  VCF file: [bold green]~100-500 MB[/bold green]\n\n"
+                "[bold cyan]Storage[/bold cyan]\n"
+                "  Thousands of VCFs on one hard drive.\n"
+                "  Raw genomes? You need a data center.\n\n"
+                "[bold cyan]Speed[/bold cyan]\n"
+                "  Load a VCF in [green]seconds[/green]. Full genome? [red]Minutes to hours[/red].\n\n"
+                "[bold cyan]Accessibility[/bold cyan]\n"
+                "  Works on a laptop. No cluster. No cloud bill.\n\n"
+                "[bold cyan]Transfer[/bold cyan]\n"
+                "  Send to a collaborator in minutes, not hours.\n\n"
+                "[bold yellow]Standardized by GA4GH[/bold yellow]\n"
+                "  Global Alliance for Genomics and Health (600+ orgs)\n"
+                "  [dim]Broad Institute ↔ UK Biobank ↔ Tokyo — same format[/dim]"
             ),
             title="[bold]Why Use VCF?[/bold]",
             border_style="green",
