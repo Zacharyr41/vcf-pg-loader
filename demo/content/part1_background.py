@@ -7,7 +7,7 @@ from ..components.diagrams import (
     sequencing_flow_panel,
 )
 from ..components.vcf_snippets import (
-    genotype_table,
+    genotype_panel,
     impact_table,
     info_number_panel,
     rare_disease_filters_table,
@@ -178,7 +178,7 @@ def add_section_2(p: Presenter) -> None:
 
     p.slide(
         "Genotype Notation",
-        genotype_table,
+        genotype_panel,
     )
 
 

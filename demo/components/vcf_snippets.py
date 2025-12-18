@@ -343,6 +343,40 @@ def info_number_panel() -> Group:
     )
 
 
+def genotype_panel() -> Group:
+    vcf_example = Text()
+    vcf_example.append("#CHROM  POS    ID  REF  ALT  QUAL  FILTER  INFO  ", style="dim")
+    vcf_example.append("FORMAT", style="bold cyan")
+    vcf_example.append("     ", style="dim")
+    vcf_example.append("SAMPLE\n", style="bold yellow")
+    vcf_example.append("chr1    12345  .   A    G    99    PASS    ...   ", style="dim")
+    vcf_example.append("GT", style="bold cyan")
+    vcf_example.append(":AD:GQ   ", style="dim")
+    vcf_example.append("0/1", style="bold green")
+    vcf_example.append(":15,15:99", style="dim")
+
+    table = Table(title="Genotype Notation", border_style="yellow", show_header=True)
+    table.add_column("Genotype", style="bold cyan", justify="center")
+    table.add_column("Meaning")
+    table.add_column("Zygosity", style="yellow")
+
+    table.add_row("0/0", "Two copies of reference", "Homozygous ref")
+    table.add_row("0/1", "One ref, one alternate", "Heterozygous")
+    table.add_row("1/1", "Two copies of alternate", "Homozygous alt")
+    table.add_row("1/2", "Two different alternates", "Compound het")
+    table.add_row("./.", "Unknown/missing", "No call")
+
+    return Group(
+        Panel(
+            vcf_example,
+            title="[bold]GT (Genotype) in FORMAT/SAMPLE[/bold]",
+            border_style="cyan",
+        ),
+        Text(""),
+        table,
+    )
+
+
 def genotype_table() -> Table:
     table = Table(title="Genotype Notation", border_style="yellow")
     table.add_column("Genotype", style="bold cyan")
