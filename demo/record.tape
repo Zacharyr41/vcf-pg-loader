@@ -42,99 +42,99 @@ Sleep 2s
 # Navigate through slides (simulating Enter keypresses)
 # Part I, Section 1: VCF Files: From DNA to Data (4 slides)
 Enter
-Sleep 3s
+Sleep 8s
 Enter
-Sleep 3s
+Sleep 10s
 Enter
-Sleep 3s
+Sleep 8s
 Enter
-Sleep 3s
+Sleep 8s
 
 # Part I, Section 2: Anatomy of a VCF File (8 slides)
 Enter
-Sleep 3s
+Sleep 8s
 Enter
-Sleep 3s
+Sleep 10s
 Enter
-Sleep 3s
+Sleep 10s
 Enter
-Sleep 3s
+Sleep 8s
 Enter
-Sleep 3s
+Sleep 10s
 Enter
-Sleep 3s
+Sleep 10s
 Enter
-Sleep 3s
+Sleep 8s
 Enter
-Sleep 3s
+Sleep 8s
 
 # Part I, Section 3: VCF in Rare Disease Research (6 slides)
 Enter
-Sleep 3s
+Sleep 10s
 Enter
-Sleep 3s
+Sleep 8s
 Enter
-Sleep 3s
+Sleep 10s
 Enter
-Sleep 3s
+Sleep 10s
 Enter
-Sleep 3s
+Sleep 12s
 Enter
-Sleep 3s
+Sleep 10s
 
 # Part II, Section 4: Previous Tools (3 slides)
 Enter
-Sleep 3s
+Sleep 10s
 Enter
-Sleep 3s
+Sleep 10s
 Enter
-Sleep 3s
+Sleep 10s
 
 # Part II, Section 5: vcf-pg-loader Architecture (5 slides)
 Enter
-Sleep 3s
+Sleep 8s
 Enter
-Sleep 3s
+Sleep 12s
 Enter
-Sleep 3s
+Sleep 8s
 Enter
-Sleep 3s
+Sleep 10s
 Enter
-Sleep 3s
+Sleep 10s
 
 # Part II, Section 6: Research Pipeline Walkthrough (6 slides)
 Enter
-Sleep 3s
+Sleep 10s
 Enter
-Sleep 3s
+Sleep 10s
 Enter
-Sleep 3s
+Sleep 12s
 Enter
-Sleep 3s
+Sleep 12s
 Enter
-Sleep 3s
+Sleep 10s
 Enter
-Sleep 3s
+Sleep 10s
 
 # Part II, Section 7: Performance & Compliance (4 slides)
 Enter
-Sleep 3s
+Sleep 8s
 Enter
-Sleep 3s
+Sleep 10s
 Enter
-Sleep 3s
+Sleep 10s
 Enter
-Sleep 3s
+Sleep 10s
 
 # Part II, Section 8: Future: Vector Embeddings (4 slides)
 Enter
-Sleep 3s
+Sleep 10s
 Enter
-Sleep 3s
+Sleep 10s
 Enter
-Sleep 3s
+Sleep 12s
 Enter
-Sleep 3s
+Sleep 8s
 
 # Final slide - end
-Sleep 5s
+Sleep 8s

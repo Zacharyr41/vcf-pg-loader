@@ -29,57 +29,57 @@ Sleep 2s
 
 # Part II, Section 4: Previous Tools (3 slides)
 Enter
-Sleep 3s
+Sleep 10s
 Enter
-Sleep 3s
+Sleep 10s
 Enter
-Sleep 3s
+Sleep 10s
 
 # Part II, Section 5: vcf-pg-loader Architecture (5 slides)
 Enter
-Sleep 3s
+Sleep 8s
 Enter
-Sleep 3s
+Sleep 12s
 Enter
-Sleep 3s
+Sleep 8s
 Enter
-Sleep 3s
+Sleep 10s
 Enter
-Sleep 3s
+Sleep 10s
 
 # Part II, Section 6: Research Pipeline Walkthrough (6 slides)
 Enter
-Sleep 3s
+Sleep 10s
 Enter
-Sleep 3s
+Sleep 10s
 Enter
-Sleep 3s
+Sleep 12s
 Enter
-Sleep 3s
+Sleep 12s
 Enter
-Sleep 3s
+Sleep 10s
 Enter
-Sleep 3s
+Sleep 10s
 
 # Part II, Section 7: Performance & Compliance (4 slides)
 Enter
-Sleep 3s
+Sleep 8s
 Enter
-Sleep 3s
+Sleep 10s
 Enter
-Sleep 3s
+Sleep 10s
 Enter
-Sleep 3s
+Sleep 10s
 
 # Part II, Section 8: Future: Vector Embeddings (4 slides)
 Enter
-Sleep 3s
+Sleep 10s
 Enter
-Sleep 3s
+Sleep 10s
 Enter
-Sleep 3s
+Sleep 12s
 Enter
-Sleep 3s
+Sleep 8s
 
 # End
-Sleep 5s
+Sleep 8s

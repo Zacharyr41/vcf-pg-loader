@@ -29,45 +29,45 @@ Sleep 2s
 
 # Part I, Section 1: VCF Files: From DNA to Data (4 slides)
 Enter
-Sleep 3s
+Sleep 8s
 Enter
-Sleep 3s
+Sleep 10s
 Enter
-Sleep 3s
+Sleep 8s
 Enter
-Sleep 3s
+Sleep 8s
 
 # Part I, Section 2: Anatomy of a VCF File (8 slides)
 Enter
-Sleep 3s
+Sleep 8s
 Enter
-Sleep 3s
+Sleep 10s
 Enter
-Sleep 3s
+Sleep 10s
 Enter
-Sleep 3s
+Sleep 8s
 Enter
-Sleep 3s
+Sleep 10s
 Enter
-Sleep 3s
+Sleep 10s
 Enter
-Sleep 3s
+Sleep 8s
 Enter
-Sleep 3s
+Sleep 8s
 
 # Part I, Section 3: VCF in Rare Disease Research (6 slides)
 Enter
-Sleep 3s
+Sleep 10s
 Enter
-Sleep 3s
+Sleep 8s
 Enter
-Sleep 3s
+Sleep 10s
 Enter
-Sleep 3s
+Sleep 10s
 Enter
-Sleep 3s
+Sleep 12s
 Enter
-Sleep 3s
+Sleep 10s
 
 # End
-Sleep 5s
+Sleep 8s
