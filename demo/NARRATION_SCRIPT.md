@@ -372,55 +372,83 @@ And here's the best part: you don't need to set up PostgreSQL yourself. Just run
 
 ### Section 6: Research Pipeline Walkthrough
 
-**[Slide 41: Pipeline Overview]**
+**[Slide 41: Pipeline — Trio VCF Files]**
 
 Let me walk you through a real rare disease analysis.
 
-You have a trio: child, mother, father. Three VCF files. You want to find de novo variants—mutations that appeared in the child but aren't in either parent.
+At the top—highlighted in cyan—you have a trio: child, mother, father. Three VCF files. The proband is the affected individual, the one with symptoms. The parents' VCFs help us understand which variants were inherited and which appeared new.
 
-**[Slide 42: Load the Data]**
+This is the standard setup for rare disease diagnostics. Sequence the affected child, sequence both biological parents, compare.
 
-Step one: load all three VCFs. One command per file. Takes maybe 30 seconds each.
+**[Slide 42: Pipeline — vcf-pg-loader]**
 
-**[Slide 43: Query for Candidates]**
+All three files flow into vcf-pg-loader—highlighted in green.
 
-Step two: write a SQL query. Give me variants in the proband that are rare, HIGH or MODERATE impact, and not classified as benign.
+One command per file. Each load takes maybe 30 seconds for a typical exome. The tool normalizes variants, handles the INFO and FORMAT fields, streams everything into PostgreSQL. No manual schema setup. No ETL scripts. Just point it at your VCFs.
 
-That query runs in seconds. Returns your candidates.
+**[Slide 43: Pipeline — Unified Database]**
 
-**[Slide 44: Compound Heterozygotes]**
+Now everything lives in a single PostgreSQL database—highlighted in blue.
+
+This is the key insight: all three samples are in the same place. You can join proband variants to parent variants in a single query. You can filter by inheritance pattern. You can calculate allele frequencies across your cohort. Everything is unified and indexed.
+
+**[Slide 44: Pipeline — Inheritance Queries]**
+
+And from that database, you run inheritance queries—highlighted in yellow.
+
+De novo: variants in the child that aren't in either parent. Recessive: variants where the child is homozygous or compound het, and each parent contributed one copy. Compound het: two different damaging variants in the same gene.
+
+Each query type is just SQL. Different WHERE clauses, different JOIN conditions. Same underlying data.
+
+**[Slide 45: Load the Data]**
+
+Let me show you the actual commands. Load proband, mother, father. Each gets a sample ID so you can identify them in queries later. That's it—three commands and your data is ready.
+
+**[Slide 46: Query for Candidates]**
+
+Now write your SQL. Give me variants in the proband that are rare—less than 0.1% frequency in gnomAD—HIGH or MODERATE impact, and not classified as benign in ClinVar.
+
+That query runs in seconds. Returns your candidates. Maybe 10, maybe 50, depending on the patient.
+
+**[Slide 47: Compound Heterozygotes]**
 
 Want to check for compound heterozygotes—two different damaging variants in the same gene? That's another SQL query. Group by gene, count heterozygous variants, filter for genes with two or more.
 
-**[Slide 45: Adding Samples]**
+If you find a gene with two hits, you've got a compound het candidate. Classic recessive pattern.
+
+**[Slide 48: Adding Samples]**
 
 Now here's where it gets powerful. Mid-study, a sibling's sample arrives. Just load it. No re-processing. The new sample is immediately queryable alongside the existing data.
 
-**[Slide 46: Iterative Research]**
+In traditional pipelines, adding a sample often means re-running the whole analysis. Here? One command, and the sibling is in the database. Query across all four samples instantly.
+
+**[Slide 49: Iterative Research]**
 
 Compare the workflows. Traditional: new filter idea, re-run pipeline, wait hours, review results. With vcf-pg-loader: new filter idea, write SQL, execute in seconds, review results. Iterate as fast as you can think.
+
+Research is exploration. The faster you can test hypotheses, the more ground you cover.
 
 ---
 
 ### Section 7: Performance & Compliance
 
-**[Slide 47: Benchmarks]**
+**[Slide 50: Benchmarks]**
 
 Let's talk numbers.
 
 100,000 variants: about 1.2 seconds to load. A million variants: 11 seconds. Five million: under a minute. Sustained throughput of 90,000+ variants per second.
 
-**[Slide 48: Why PostgreSQL?]**
+**[Slide 51: Why PostgreSQL?]**
 
 Why PostgreSQL specifically?
 
 Performance: binary protocol, parallel queries, advanced optimizer. Reliability: ACID compliance, point-in-time recovery. Ecosystem: every BI tool connects to Postgres. Cloud providers all offer managed Postgres.
 
-**[Slide 49: Clinical Compliance]**
+**[Slide 52: Clinical Compliance]**
 
 For clinical work, you need audit trails. Every load is tracked—timestamp, source file, MD5 checksum. You can trace any variant back to its origin. Role-based access control. SSL encryption. HIPAA-compatible infrastructure.
 
-**[Slide 50: Validation]**
+**[Slide 53: Validation]**
 
 And validation is built in. Post-load verification, duplicate detection, batch IDs linking variants to source files. Everything is reproducible.
 
@@ -428,23 +456,23 @@ And validation is built in. Post-load verification, duplicate detection, batch I
 
 ### Section 8: Future
 
-**[Slide 51: The Vision]**
+**[Slide 54: The Vision]**
 
 Let me show you where this is going.
 
 Right now, we find exact matches. Variants that pass specific filters. But what if we could find **similar** cases?
 
-**[Slide 52: Vector Architecture]**
+**[Slide 55: Vector Architecture]**
 
 Imagine embedding each variant profile as a vector. Gene context, consequence type, pathogenicity scores, even phenotype terms. Store these in pgvector—PostgreSQL's vector extension.
 
-**[Slide 53: Applications]**
+**[Slide 56: Applications]**
 
 Now you can ask: show me patients with variant profiles **similar** to this undiagnosed case. Surface diagnoses from cases that looked like this one. Find research candidates with matching patterns.
 
 It's a different way of thinking about genomic data.
 
-**[Slide 54: Thank You]**
+**[Slide 57: Thank You]**
 
 vcf-pg-loader is open source. Available on PyPI, Bioconda, and GitHub.
 

@@ -16,7 +16,10 @@ from ..components.diagrams import (
     dataflow_parser_panel,
     dataflow_postgres_panel,
     iterative_research_panel,
-    rare_disease_pipeline_panel,
+    pipeline_database_panel,
+    pipeline_loader_panel,
+    pipeline_queries_panel,
+    pipeline_trio_panel,
     vector_embedding_panel,
 )
 from ..components.vcf_snippets import (
@@ -192,12 +195,27 @@ def add_section_6(p: Presenter) -> None:
     p.section(6, "Research Pipeline Walkthrough")
 
     p.slide(
-        "Rare Disease Pipeline Overview",
-        rare_disease_pipeline_panel,
+        "Pipeline: Trio VCF Files",
+        pipeline_trio_panel,
     )
 
     p.slide(
-        "Step 1: Load Trio VCFs",
+        "Pipeline: vcf-pg-loader",
+        pipeline_loader_panel,
+    )
+
+    p.slide(
+        "Pipeline: Unified Database",
+        pipeline_database_panel,
+    )
+
+    p.slide(
+        "Pipeline: Inheritance Queries",
+        pipeline_queries_panel,
+    )
+
+    p.slide(
+        "Load Trio VCFs",
         lambda: Syntax(
             "# Load proband, mother, and father VCFs\n"
             "vcf-pg-loader load proband.vcf.gz --sample-id PROBAND_001\n"

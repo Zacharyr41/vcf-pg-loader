@@ -575,6 +575,164 @@ def rare_disease_pipeline_panel() -> Panel:
     )
 
 
+PIPELINE_TRIO = """
+[bold cyan]┌──────────────┐    ┌──────────────┐    ┌──────────────┐[/bold cyan]
+[bold cyan]│   Proband    │    │    Mother    │    │    Father    │[/bold cyan]
+[bold cyan]│   VCF        │    │    VCF       │    │    VCF       │[/bold cyan]
+[bold cyan]└──────┬───────┘    └──────┬───────┘    └──────┬───────┘[/bold cyan]
+       │                   │                   │
+       └───────────────────┼───────────────────┘
+                           │
+                           ▼
+[dim]              ┌────────────────────────┐
+              │    vcf-pg-loader       │
+              │    ────────────────    │
+              │    Load all samples    │
+              │    to PostgreSQL       │
+              └───────────┬────────────┘
+                          │
+                          ▼
+              ┌────────────────────────┐
+              │    PostgreSQL DB       │
+              │    ────────────────    │
+              │    Unified variant     │
+              │    database            │
+              └───────────┬────────────┘
+                          │
+       ┌──────────────────┼──────────────────┐
+       │                  │                  │
+       ▼                  ▼                  ▼
+┌─────────────┐   ┌─────────────┐   ┌─────────────┐
+│  De novo    │   │  Recessive  │   │  Compound   │
+│  Query      │   │  Query      │   │  Het Query  │
+└─────────────┘   └─────────────┘   └─────────────┘[/dim]
+"""
+
+
+PIPELINE_LOADER = """
+[dim]┌──────────────┐    ┌──────────────┐    ┌──────────────┐
+│   Proband    │    │    Mother    │    │    Father    │
+│   VCF        │    │    VCF       │    │    VCF       │
+└──────┬───────┘    └──────┬───────┘    └──────┬───────┘
+       │                   │                   │
+       └───────────────────┼───────────────────┘
+                           │
+                           ▼[/dim]
+              [bold green]┌────────────────────────┐[/bold green]
+              [bold green]│    vcf-pg-loader       │[/bold green]
+              [bold green]│    ────────────────    │[/bold green]
+              [bold green]│    Load all samples    │[/bold green]
+              [bold green]│    to PostgreSQL       │[/bold green]
+              [bold green]└───────────┬────────────┘[/bold green]
+[dim]                          │
+                          ▼
+              ┌────────────────────────┐
+              │    PostgreSQL DB       │
+              │    ────────────────    │
+              │    Unified variant     │
+              │    database            │
+              └───────────┬────────────┘
+                          │
+       ┌──────────────────┼──────────────────┐
+       │                  │                  │
+       ▼                  ▼                  ▼
+┌─────────────┐   ┌─────────────┐   ┌─────────────┐
+│  De novo    │   │  Recessive  │   │  Compound   │
+│  Query      │   │  Query      │   │  Het Query  │
+└─────────────┘   └─────────────┘   └─────────────┘[/dim]
+"""
+
+
+PIPELINE_DATABASE = """
+[dim]┌──────────────┐    ┌──────────────┐    ┌──────────────┐
+│   Proband    │    │    Mother    │    │    Father    │
+│   VCF        │    │    VCF       │    │    VCF       │
+└──────┬───────┘    └──────┬───────┘    └──────┬───────┘
+       │                   │                   │
+       └───────────────────┼───────────────────┘
+                           │
+                           ▼
+              ┌────────────────────────┐
+              │    vcf-pg-loader       │
+              │    ────────────────    │
+              │    Load all samples    │
+              │    to PostgreSQL       │
+              └───────────┬────────────┘
+                          │
+                          ▼[/dim]
+              [bold blue]┌────────────────────────┐[/bold blue]
+              [bold blue]│    PostgreSQL DB       │[/bold blue]
+              [bold blue]│    ────────────────    │[/bold blue]
+              [bold blue]│    Unified variant     │[/bold blue]
+              [bold blue]│    database            │[/bold blue]
+              [bold blue]└───────────┬────────────┘[/bold blue]
+[dim]                          │
+       ┌──────────────────┼──────────────────┐
+       │                  │                  │
+       ▼                  ▼                  ▼
+┌─────────────┐   ┌─────────────┐   ┌─────────────┐
+│  De novo    │   │  Recessive  │   │  Compound   │
+│  Query      │   │  Query      │   │  Het Query  │
+└─────────────┘   └─────────────┘   └─────────────┘[/dim]
+"""
+
+
+PIPELINE_QUERIES = """
+[dim]┌──────────────┐    ┌──────────────┐    ┌──────────────┐
+│   Proband    │    │    Mother    │    │    Father    │
+│   VCF        │    │    VCF       │    │    VCF       │
+└──────┬───────┘    └──────┬───────┘    └──────┬───────┘
+       │                   │                   │
+       └───────────────────┼───────────────────┘
+                           │
+                           ▼
+              ┌────────────────────────┐
+              │    vcf-pg-loader       │
+              │    ────────────────    │
+              │    Load all samples    │
+              │    to PostgreSQL       │
+              └───────────┬────────────┘
+                          │
+                          ▼
+              ┌────────────────────────┐
+              │    PostgreSQL DB       │
+              │    ────────────────    │
+              │    Unified variant     │
+              │    database            │
+              └───────────┬────────────┘
+                          │
+       ┌──────────────────┼──────────────────┐
+       │                  │                  │
+       ▼                  ▼                  ▼[/dim]
+[bold yellow]┌─────────────┐   ┌─────────────┐   ┌─────────────┐[/bold yellow]
+[bold yellow]│  De novo    │   │  Recessive  │   │  Compound   │[/bold yellow]
+[bold yellow]│  Query      │   │  Query      │   │  Het Query  │[/bold yellow]
+[bold yellow]└─────────────┘   └─────────────┘   └─────────────┘[/bold yellow]
+"""
+
+
+def pipeline_trio_panel() -> Panel:
+    text = Text.from_markup(PIPELINE_TRIO)
+    return Panel(text, title="[bold]Step 1: Trio VCF Files[/bold]", border_style="cyan")
+
+
+def pipeline_loader_panel() -> Panel:
+    text = Text.from_markup(PIPELINE_LOADER)
+    return Panel(text, title="[bold]Step 2: Load with vcf-pg-loader[/bold]", border_style="green")
+
+
+def pipeline_database_panel() -> Panel:
+    text = Text.from_markup(PIPELINE_DATABASE)
+    return Panel(text, title="[bold]Step 3: Unified Database[/bold]", border_style="blue")
+
+
+def pipeline_queries_panel() -> Panel:
+    text = Text.from_markup(PIPELINE_QUERIES)
+    return Panel(
+        text, title="[bold]Step 4: Query for Inheritance Patterns[/bold]", border_style="yellow"
+    )
+
+
 def iterative_research_panel() -> Panel:
     text = Text.from_markup(ITERATIVE_RESEARCH)
     return Panel(
