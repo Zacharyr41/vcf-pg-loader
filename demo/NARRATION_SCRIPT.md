@@ -62,7 +62,9 @@ And that difference changes everything.
 
 **Transfer**: Sending a VCF to a collaborator takes minutes. Sending a full genome? Better start that upload before lunch.
 
-And it's standardized. Every major sequencing center, every research hospital, every diagnostic lab—they all speak VCF. Your analysis pipeline works everywhere.
+And it's standardized. The VCF format is maintained by the **GA4GH**—the Global Alliance for Genomics and Health. That's a consortium of over 600 organizations: research institutes, hospitals, pharma companies, governments. They agree on how genomic data should be formatted and shared.
+
+So when you write code that reads a VCF from the Broad Institute, that same code works on a VCF from the UK Biobank, or from a hospital in Tokyo. Every major sequencing center, every research hospital, every diagnostic lab—they all speak VCF. Your analysis pipeline works everywhere.
 
 **[Slide 4: Reference vs Sample]**
 
