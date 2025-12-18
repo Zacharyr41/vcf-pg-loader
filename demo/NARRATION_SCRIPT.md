@@ -126,11 +126,19 @@ These INFO fields are defined in the header and vary by variant caller.
 
 **[Slide 12: FORMAT & SAMPLE]**
 
-Finally, **FORMAT and SAMPLE**. FORMAT defines the order of per-sample fields. Then each sample gets its own column with those values.
+Finally, **FORMAT and SAMPLE**. This is where per-sample data lives—the actual results for each person sequenced.
 
-GT is genotype: 0/1 means heterozygous—one reference copy, one variant copy. AD is allelic depth: how many reads supported each allele. GQ is genotype quality.
+FORMAT is like a template: it tells you what fields are coming and in what order. Here it says GT:AD:GQ. Then each sample column fills in those values.
 
-In multi-sample VCFs, you'll have many sample columns—one per person.
+Let's decode them:
+
+**GT** is genotype. Remember, humans have two copies of each chromosome—one from mom, one from dad. GT tells you what this person has on each copy. 0/1 means one copy has the reference allele, one has the alternate. We call that **heterozygous**. If it were 1/1, both copies have the variant—**homozygous alternate**. 0/0 means no variant at all—**homozygous reference**.
+
+**AD** is allelic depth—how many reads supported each allele. AD=15,15 means 15 reads showed the reference A, 15 reads showed the alternate G. A nice even split, exactly what you'd expect for a heterozygous call.
+
+**GQ** is genotype quality—how confident are we in this genotype call? 99 is very high. This isn't just "we see a variant," it's "we're confident this person is heterozygous, not homozygous."
+
+In multi-sample VCFs—like a family study—you'll have many sample columns. One per person. Same FORMAT, different values for each individual.
 
 **[Slide 13: A Simple SNP]**
 
