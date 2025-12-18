@@ -128,17 +128,25 @@ These INFO fields are defined in the header and vary by variant caller.
 
 Finally, **FORMAT and SAMPLE**. This is where per-sample data lives—the actual results for each person sequenced.
 
-FORMAT is like a template: it tells you what fields are coming and in what order. Here it says GT:AD:GQ. Then each sample column fills in those values.
+Here's the key insight: everything before this—CHROM, POS, REF, ALT, INFO—describes the **variant itself**. But FORMAT and SAMPLE describe **what each person has** at that variant.
 
-Let's decode them:
+**FORMAT** is like a column header for sample data. It says: "here are the fields I'm about to give you, in this order." GT:AD:GQ means "first genotype, then allelic depths, then genotype quality." Different variant callers include different fields, so FORMAT tells you how to parse what follows.
 
-**GT** is genotype. Remember, humans have two copies of each chromosome—one from mom, one from dad. GT tells you what this person has on each copy. 0/1 means one copy has the reference allele, one has the alternate. We call that **heterozygous**. If it were 1/1, both copies have the variant—**homozygous alternate**. 0/0 means no variant at all—**homozygous reference**.
+**SAMPLE** columns contain the actual values. If you sequenced a family of four, you'd have four sample columns—maybe named "proband," "mother," "father," "sibling." Each column has the same structure defined by FORMAT, but different values for each person.
 
-**AD** is allelic depth—how many reads supported each allele. AD=15,15 means 15 reads showed the reference A, 15 reads showed the alternate G. A nice even split, exactly what you'd expect for a heterozygous call.
+The sample data here reads: 0/1:15,15:99. Let's decode it:
 
-**GQ** is genotype quality—how confident are we in this genotype call? 99 is very high. This isn't just "we see a variant," it's "we're confident this person is heterozygous, not homozygous."
+**GT** is genotype. Remember, humans are diploid—we have two copies of each chromosome, one inherited from mom, one from dad. GT tells you what alleles this person has on each copy.
 
-In multi-sample VCFs—like a family study—you'll have many sample columns. One per person. Same FORMAT, different values for each individual.
+The numbers refer to alleles: 0 means reference, 1 means the first alternate, 2 would mean a second alternate if there was one.
+
+So 0/1 means one chromosome has the reference allele, the other has the alternate. We call that **heterozygous**—two different alleles. If it were 1/1, both copies carry the variant—**homozygous alternate**. 0/0 means neither copy has the variant—**homozygous reference**.
+
+**AD** is allelic depth—how many sequencing reads supported each allele. AD=15,15 means 15 reads showed the reference A, and 15 reads showed the alternate G. A nice even split, which is exactly what you'd expect for a true heterozygous call. If it were 28,2? That might be a sequencing error rather than a real variant.
+
+**GQ** is genotype quality—how confident are we in this specific genotype call? 99 is very high, essentially saying "we're nearly certain this person is heterozygous." This is different from QUAL, which measures confidence that a variant exists at all. GQ measures confidence in *which genotype* this individual has.
+
+One more thing: these sample-level annotations come from the **variant caller**—software like GATK, DeepVariant, or Strelka. The caller looks at the aligned reads, counts alleles, applies statistical models, and outputs these values. Different callers may include different fields: some add PL for phred-scaled likelihoods, DP for per-sample depth, or SB for strand bias. The header defines what's available, and FORMAT tells you what's in each record.
 
 **[Slide 13: A Simple SNP]**
 
@@ -146,7 +154,23 @@ Let's put it all together with a real example. Chromosome 1, position 12,345. Th
 
 **[Slide 14: Variant Types]**
 
-Not all variants are single letter changes. You can have deletions, where bases are removed. Insertions, where bases are added. MNPs where multiple letters change at once. And larger structural variants that rearrange entire sections of DNA.
+Not all variants are single letter changes. Let me walk through the main types.
+
+**SNP**—Single Nucleotide Polymorphism. One letter changes to another. A becomes G, C becomes T. The simplest and most common type of variant. About 4 to 5 million SNPs in a typical genome.
+
+**Insertion**. Extra bases get added where they weren't in the reference. Could be one base, could be hundreds. In the VCF, you'll see a short REF and a longer ALT—the extra bases are what got inserted.
+
+**Deletion**. The opposite—bases that were in the reference are missing in this person. Longer REF, shorter ALT. The missing bases got deleted.
+
+**Indel**. A catchall term for insertions and deletions together. Sometimes you'll see both happen at once—a few bases removed and different ones added in their place. Bioinformaticians call these "indels" because they're mechanistically similar.
+
+**MNP**—Multi-Nucleotide Polymorphism. Two or more adjacent bases change together. Instead of A changing to G, maybe ACT changes to GGA. Rarer than SNPs, but important because they might affect codons differently than individual SNPs would.
+
+**Structural Variants**. The big ones. Large deletions or duplications of hundreds to millions of bases. Inversions where a section of DNA gets flipped. Translocations where pieces from different chromosomes get swapped. These can be harder to detect and represent in VCF format, but they're often clinically significant.
+
+**Copy Number Variants**—CNVs. A special case of structural variants where sections of the genome are duplicated or deleted. Instead of two copies of a gene, someone might have one or three or four. These are common and often affect gene expression.
+
+Most analysis focuses on SNPs and small indels because they're the easiest to call confidently. But structural variants are getting more attention as long-read sequencing improves.
 
 **[Slide 15: Deletion Example]**
 
