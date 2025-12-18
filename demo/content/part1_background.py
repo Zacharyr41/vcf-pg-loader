@@ -48,18 +48,18 @@ def add_section_1(p: Presenter) -> None:
         "Why VCF?",
         lambda: Panel(
             Text.from_markup(
-                "[bold yellow]Efficiency:[/bold yellow]\n"
+                "[bold yellow]Efficiency (200x smaller):[/bold yellow]\n"
                 "  • Full genome: ~100 GB\n"
-                "  • VCF file: ~100-500 MB\n"
-                "  • Stores only the [cyan]differences[/cyan]\n\n"
-                "[bold yellow]Standardization:[/bold yellow]\n"
-                "  • Industry-wide format\n"
-                "  • Tool interoperability\n"
-                "  • Maintained by GA4GH\n\n"
-                "[bold yellow]Content:[/bold yellow]\n"
-                "  • Typically 4-6 million variants per human\n"
-                "  • Most are common (shared with population)\n"
-                "  • ~10,000 are rare or unique"
+                "  • VCF file: ~100-500 MB\n\n"
+                "[bold yellow]Practical Benefits:[/bold yellow]\n"
+                "  • [cyan]Storage[/cyan]: Thousands of samples on one drive\n"
+                "  • [cyan]Speed[/cyan]: Load in seconds, not hours\n"
+                "  • [cyan]Accessibility[/cyan]: Works on a laptop, no cluster needed\n"
+                "  • [cyan]Transfer[/cyan]: Share with collaborators in minutes\n\n"
+                "[bold yellow]Standardization (GA4GH):[/bold yellow]\n"
+                "  • Global Alliance for Genomics and Health\n"
+                "  • 600+ member organizations worldwide\n"
+                "  • Same format: Broad Institute ↔ UK Biobank ↔ Tokyo"
             ),
             title="[bold]Why Use VCF?[/bold]",
             border_style="green",
