@@ -224,7 +224,17 @@ We also check ClinVar, a database of known disease-causing variants. And we look
 
 **[Slide 22: Inheritance Patterns]**
 
-Inheritance matters too. Some diseases require variants from **both** parents—that's recessive. Some only need one copy—dominant. And some appear brand new in the child, not inherited at all—de novo.
+Inheritance matters too. This is Mendelian genetics—named after Gregor Mendel, the monk who figured out how traits pass from parents to offspring by studying peas in the 1860s. The same principles apply to human disease.
+
+**De Novo** variants are brand new mutations. They appear in the child but aren't in either parent. These often cause severe developmental disorders because natural selection hasn't had a chance to remove them from the population. When you're analyzing a trio—child plus both parents—de novo variants are prime suspects.
+
+**Autosomal Recessive** diseases require two broken copies of a gene. One from mom, one from dad. Each parent is a healthy carrier with one working copy. The child who inherits both broken copies has the disease. Classic examples: cystic fibrosis, sickle cell anemia. In the VCF, you're looking for the child to be homozygous—1/1—or compound heterozygous, meaning two *different* damaging variants in the same gene.
+
+**Autosomal Dominant** diseases only need one broken copy. A single variant is enough to cause disease, even with one normal copy present. Often you'll see the same variant in an affected parent and affected child. Huntington's disease works this way. In the VCF, heterozygous 0/1 is sufficient.
+
+**X-Linked** inheritance is special because males have only one X chromosome. A damaging variant on the X means males have no backup copy—they're affected. Females with two X chromosomes can be carriers, often with milder symptoms or none at all. Duchenne muscular dystrophy follows this pattern.
+
+Understanding inheritance lets you filter variants based on family structure. If you suspect a recessive disease, you can immediately exclude any variant where the child is heterozygous and only one parent carries it.
 
 **[Slide 23: Filtering Cascade]**
 
