@@ -4,8 +4,17 @@ from rich.syntax import Syntax
 from rich.text import Text
 
 from ..components.diagrams import (
-    architecture_panel,
-    data_flow_panel,
+    architecture_copy_panel,
+    architecture_normalizer_panel,
+    architecture_overview_panel,
+    architecture_parser_panel,
+    architecture_postgres_panel,
+    architecture_schema_panel,
+    dataflow_copy_panel,
+    dataflow_input_panel,
+    dataflow_normalizer_panel,
+    dataflow_parser_panel,
+    dataflow_postgres_panel,
     iterative_research_panel,
     rare_disease_pipeline_panel,
     vector_embedding_panel,
@@ -99,38 +108,57 @@ def add_section_5(p: Presenter) -> None:
 
     p.slide(
         "Architecture Overview",
-        architecture_panel,
+        architecture_overview_panel,
     )
 
     p.slide(
-        "Data Flow",
-        data_flow_panel,
+        "VCF Parser (cyvcf2)",
+        architecture_parser_panel,
     )
 
     p.slide(
-        "Key Components",
-        lambda: Panel(
-            Text.from_markup(
-                "[bold cyan]VCF Parser (cyvcf2)[/bold cyan]\n"
-                "  • Memory-efficient streaming\n"
-                "  • Batched processing (configurable)\n"
-                "  • Number=A/R/G field handling\n\n"
-                "[bold cyan]Normalizer[/bold cyan]\n"
-                "  • Left-align indels (vt algorithm)\n"
-                "  • Trim redundant bases\n"
-                "  • Decompose multi-allelics\n\n"
-                "[bold cyan]Binary COPY[/bold cyan]\n"
-                "  • PostgreSQL's fastest insert method\n"
-                "  • Asyncpg for async I/O\n"
-                "  • Parallel workers\n\n"
-                "[bold cyan]Schema Manager[/bold cyan]\n"
-                "  • Chromosome-partitioned tables\n"
-                "  • Dynamic column creation\n"
-                "  • Index management"
-            ),
-            title="[bold]Core Components[/bold]",
-            border_style="green",
-        ),
+        "Normalizer",
+        architecture_normalizer_panel,
+    )
+
+    p.slide(
+        "Schema Manager",
+        architecture_schema_panel,
+    )
+
+    p.slide(
+        "Binary COPY (asyncpg)",
+        architecture_copy_panel,
+    )
+
+    p.slide(
+        "PostgreSQL",
+        architecture_postgres_panel,
+    )
+
+    p.slide(
+        "Data Flow: VCF Input",
+        dataflow_input_panel,
+    )
+
+    p.slide(
+        "Data Flow: Streaming Parser",
+        dataflow_parser_panel,
+    )
+
+    p.slide(
+        "Data Flow: Normalization",
+        dataflow_normalizer_panel,
+    )
+
+    p.slide(
+        "Data Flow: Binary COPY",
+        dataflow_copy_panel,
+    )
+
+    p.slide(
+        "Data Flow: Query Ready",
+        dataflow_postgres_panel,
     )
 
     p.slide(

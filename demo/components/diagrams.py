@@ -219,12 +219,352 @@ def architecture_panel() -> Panel:
     )
 
 
+ARCH_OVERVIEW = """
+[bold cyan]┌─────────────────────────────────────────────────────────────────────┐[/bold cyan]
+[bold cyan]│                        vcf-pg-loader                                │[/bold cyan]
+[bold cyan]└─────────────────────────────────────────────────────────────────────┘[/bold cyan]
+                                  │
+          ┌───────────────────────┼───────────────────────┐
+          │                       │                       │
+          ▼                       ▼                       ▼
+[dim]┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐
+│  VCF Parser     │   │   Normalizer    │   │  Schema Manager │
+│  ─────────────  │   │  ─────────────  │   │  ─────────────  │
+│  • cyvcf2       │   │  • Left-align   │   │  • DDL gen      │
+│  • Streaming    │   │  • Trim         │   │  • Partitions   │
+│  • Batch buffer │   │  • Decompose    │   │  • Indexes      │
+└────────┬────────┘   └────────┬────────┘   └────────┬────────┘
+         │                     │                     │
+         └─────────────────────┼─────────────────────┘
+                               │
+                               ▼
+                 ┌─────────────────────────┐
+                 │     Binary COPY         │
+                 │     (asyncpg)           │
+                 │  ───────────────────    │
+                 │  • Parallel workers     │
+                 │  • Batch inserts        │
+                 │  • 100K+ variants/sec   │
+                 └───────────┬─────────────┘
+                             │
+                             ▼
+                 ┌─────────────────────────┐
+                 │      PostgreSQL         │
+                 │  ───────────────────    │
+                 │  • Partitioned tables   │
+                 │  • Full SQL queries     │
+                 │  • Concurrent access    │
+                 │  • Audit trail          │
+                 └─────────────────────────┘[/dim]
+"""
+
+
+ARCH_PARSER = """
+[dim]┌─────────────────────────────────────────────────────────────────────┐
+│                        vcf-pg-loader                                │
+└─────────────────────────────────────────────────────────────────────┘
+                                  │
+          ┌───────────────────────┼───────────────────────┐
+          │                       │                       │
+          ▼                       ▼                       ▼[/dim]
+[bold green]┌─────────────────┐[/bold green]   [dim]┌─────────────────┐   ┌─────────────────┐[/dim]
+[bold green]│  VCF Parser     │[/bold green]   [dim]│   Normalizer    │   │  Schema Manager │[/dim]
+[bold green]│  ─────────────  │[/bold green]   [dim]│  ─────────────  │   │  ─────────────  │[/dim]
+[bold green]│  • cyvcf2       │[/bold green]   [dim]│  • Left-align   │   │  • DDL gen      │[/dim]
+[bold green]│  • Streaming    │[/bold green]   [dim]│  • Trim         │   │  • Partitions   │[/dim]
+[bold green]│  • Batch buffer │[/bold green]   [dim]│  • Decompose    │   │  • Indexes      │[/dim]
+[bold green]└────────┬────────┘[/bold green]   [dim]└────────┬────────┘   └────────┬────────┘
+         │                     │                     │
+         └─────────────────────┼─────────────────────┘
+                               │
+                               ▼
+                 ┌─────────────────────────┐
+                 │     Binary COPY         │
+                 │     (asyncpg)           │
+                 │  ───────────────────    │
+                 │  • Parallel workers     │
+                 │  • Batch inserts        │
+                 │  • 100K+ variants/sec   │
+                 └───────────┬─────────────┘
+                             │
+                             ▼
+                 ┌─────────────────────────┐
+                 │      PostgreSQL         │
+                 │  ───────────────────    │
+                 │  • Partitioned tables   │
+                 │  • Full SQL queries     │
+                 │  • Concurrent access    │
+                 │  • Audit trail          │
+                 └─────────────────────────┘[/dim]
+"""
+
+
+ARCH_NORMALIZER = """
+[dim]┌─────────────────────────────────────────────────────────────────────┐
+│                        vcf-pg-loader                                │
+└─────────────────────────────────────────────────────────────────────┘
+                                  │
+          ┌───────────────────────┼───────────────────────┐
+          │                       │                       │
+          ▼                       ▼                       ▼
+┌─────────────────┐[/dim]   [bold yellow]┌─────────────────┐[/bold yellow]   [dim]┌─────────────────┐
+│  VCF Parser     │[/dim]   [bold yellow]│   Normalizer    │[/bold yellow]   [dim]│  Schema Manager │
+│  ─────────────  │[/dim]   [bold yellow]│  ─────────────  │[/bold yellow]   [dim]│  ─────────────  │
+│  • cyvcf2       │[/dim]   [bold yellow]│  • Left-align   │[/bold yellow]   [dim]│  • DDL gen      │
+│  • Streaming    │[/dim]   [bold yellow]│  • Trim         │[/bold yellow]   [dim]│  • Partitions   │
+│  • Batch buffer │[/dim]   [bold yellow]│  • Decompose    │[/bold yellow]   [dim]│  • Indexes      │
+└────────┬────────┘[/dim]   [bold yellow]└────────┬────────┘[/bold yellow]   [dim]└────────┬────────┘
+         │                     │                     │
+         └─────────────────────┼─────────────────────┘
+                               │
+                               ▼
+                 ┌─────────────────────────┐
+                 │     Binary COPY         │
+                 │     (asyncpg)           │
+                 │  ───────────────────    │
+                 │  • Parallel workers     │
+                 │  • Batch inserts        │
+                 │  • 100K+ variants/sec   │
+                 └───────────┬─────────────┘
+                             │
+                             ▼
+                 ┌─────────────────────────┐
+                 │      PostgreSQL         │
+                 │  ───────────────────    │
+                 │  • Partitioned tables   │
+                 │  • Full SQL queries     │
+                 │  • Concurrent access    │
+                 │  • Audit trail          │
+                 └─────────────────────────┘[/dim]
+"""
+
+
+ARCH_SCHEMA = """
+[dim]┌─────────────────────────────────────────────────────────────────────┐
+│                        vcf-pg-loader                                │
+└─────────────────────────────────────────────────────────────────────┘
+                                  │
+          ┌───────────────────────┼───────────────────────┐
+          │                       │                       │
+          ▼                       ▼                       ▼
+┌─────────────────┐   ┌─────────────────┐[/dim]   [bold magenta]┌─────────────────┐[/bold magenta]
+[dim]│  VCF Parser     │   │   Normalizer    │[/dim]   [bold magenta]│  Schema Manager │[/bold magenta]
+[dim]│  ─────────────  │   │  ─────────────  │[/dim]   [bold magenta]│  ─────────────  │[/bold magenta]
+[dim]│  • cyvcf2       │   │  • Left-align   │[/dim]   [bold magenta]│  • DDL gen      │[/bold magenta]
+[dim]│  • Streaming    │   │  • Trim         │[/dim]   [bold magenta]│  • Partitions   │[/bold magenta]
+[dim]│  • Batch buffer │   │  • Decompose    │[/dim]   [bold magenta]│  • Indexes      │[/bold magenta]
+[dim]└────────┬────────┘   └────────┬────────┘[/dim]   [bold magenta]└────────┬────────┘[/bold magenta]
+[dim]         │                     │                     │
+         └─────────────────────┼─────────────────────┘
+                               │
+                               ▼
+                 ┌─────────────────────────┐
+                 │     Binary COPY         │
+                 │     (asyncpg)           │
+                 │  ───────────────────    │
+                 │  • Parallel workers     │
+                 │  • Batch inserts        │
+                 │  • 100K+ variants/sec   │
+                 └───────────┬─────────────┘
+                             │
+                             ▼
+                 ┌─────────────────────────┐
+                 │      PostgreSQL         │
+                 │  ───────────────────    │
+                 │  • Partitioned tables   │
+                 │  • Full SQL queries     │
+                 │  • Concurrent access    │
+                 │  • Audit trail          │
+                 └─────────────────────────┘[/dim]
+"""
+
+
+ARCH_COPY = """
+[dim]┌─────────────────────────────────────────────────────────────────────┐
+│                        vcf-pg-loader                                │
+└─────────────────────────────────────────────────────────────────────┘
+                                  │
+          ┌───────────────────────┼───────────────────────┐
+          │                       │                       │
+          ▼                       ▼                       ▼
+┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐
+│  VCF Parser     │   │   Normalizer    │   │  Schema Manager │
+│  ─────────────  │   │  ─────────────  │   │  ─────────────  │
+│  • cyvcf2       │   │  • Left-align   │   │  • DDL gen      │
+│  • Streaming    │   │  • Trim         │   │  • Partitions   │
+│  • Batch buffer │   │  • Decompose    │   │  • Indexes      │
+└────────┬────────┘   └────────┬────────┘   └────────┬────────┘
+         │                     │                     │
+         └─────────────────────┼─────────────────────┘
+                               │
+                               ▼[/dim]
+                 [bold blue]┌─────────────────────────┐[/bold blue]
+                 [bold blue]│     Binary COPY         │[/bold blue]
+                 [bold blue]│     (asyncpg)           │[/bold blue]
+                 [bold blue]│  ───────────────────    │[/bold blue]
+                 [bold blue]│  • Parallel workers     │[/bold blue]
+                 [bold blue]│  • Batch inserts        │[/bold blue]
+                 [bold blue]│  • 100K+ variants/sec   │[/bold blue]
+                 [bold blue]└───────────┬─────────────┘[/bold blue]
+[dim]                             │
+                             ▼
+                 ┌─────────────────────────┐
+                 │      PostgreSQL         │
+                 │  ───────────────────    │
+                 │  • Partitioned tables   │
+                 │  • Full SQL queries     │
+                 │  • Concurrent access    │
+                 │  • Audit trail          │
+                 └─────────────────────────┘[/dim]
+"""
+
+
+ARCH_POSTGRES = """
+[dim]┌─────────────────────────────────────────────────────────────────────┐
+│                        vcf-pg-loader                                │
+└─────────────────────────────────────────────────────────────────────┘
+                                  │
+          ┌───────────────────────┼───────────────────────┐
+          │                       │                       │
+          ▼                       ▼                       ▼
+┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐
+│  VCF Parser     │   │   Normalizer    │   │  Schema Manager │
+│  ─────────────  │   │  ─────────────  │   │  ─────────────  │
+│  • cyvcf2       │   │  • Left-align   │   │  • DDL gen      │
+│  • Streaming    │   │  • Trim         │   │  • Partitions   │
+│  • Batch buffer │   │  • Decompose    │   │  • Indexes      │
+└────────┬────────┘   └────────┬────────┘   └────────┬────────┘
+         │                     │                     │
+         └─────────────────────┼─────────────────────┘
+                               │
+                               ▼
+                 ┌─────────────────────────┐
+                 │     Binary COPY         │
+                 │     (asyncpg)           │
+                 │  ───────────────────    │
+                 │  • Parallel workers     │
+                 │  • Batch inserts        │
+                 │  • 100K+ variants/sec   │
+                 └───────────┬─────────────┘
+                             │
+                             ▼[/dim]
+                 [bold green]┌─────────────────────────┐[/bold green]
+                 [bold green]│      PostgreSQL         │[/bold green]
+                 [bold green]│  ───────────────────    │[/bold green]
+                 [bold green]│  • Partitioned tables   │[/bold green]
+                 [bold green]│  • Full SQL queries     │[/bold green]
+                 [bold green]│  • Concurrent access    │[/bold green]
+                 [bold green]│  • Audit trail          │[/bold green]
+                 [bold green]└─────────────────────────┘[/bold green]
+"""
+
+
+def architecture_overview_panel() -> Panel:
+    text = Text.from_markup(ARCH_OVERVIEW)
+    return Panel(text, title="[bold]vcf-pg-loader Architecture[/bold]", border_style="cyan")
+
+
+def architecture_parser_panel() -> Panel:
+    text = Text.from_markup(ARCH_PARSER)
+    return Panel(text, title="[bold]VCF Parser (cyvcf2)[/bold]", border_style="green")
+
+
+def architecture_normalizer_panel() -> Panel:
+    text = Text.from_markup(ARCH_NORMALIZER)
+    return Panel(text, title="[bold]Normalizer[/bold]", border_style="yellow")
+
+
+def architecture_schema_panel() -> Panel:
+    text = Text.from_markup(ARCH_SCHEMA)
+    return Panel(text, title="[bold]Schema Manager[/bold]", border_style="magenta")
+
+
+def architecture_copy_panel() -> Panel:
+    text = Text.from_markup(ARCH_COPY)
+    return Panel(text, title="[bold]Binary COPY (asyncpg)[/bold]", border_style="blue")
+
+
+def architecture_postgres_panel() -> Panel:
+    text = Text.from_markup(ARCH_POSTGRES)
+    return Panel(text, title="[bold]PostgreSQL[/bold]", border_style="green")
+
+
 def data_flow_panel() -> Panel:
     return Panel(
         DATA_FLOW_SIMPLE,
         title="[bold]Data Flow[/bold]",
         border_style="blue",
     )
+
+
+DATAFLOW_INPUT = """
+  [bold cyan]VCF File[/bold cyan] ──▶ [dim]Parser ──▶ Normalizer ──▶ COPY ──▶ PostgreSQL[/dim]
+     │           [dim]│            │           │           │[/dim]
+     │           [dim]│            │           │           │[/dim]
+   [bold cyan]Input[/bold cyan]     [dim]Streaming    Left-align   Binary      Query[/dim]
+   [bold cyan]file[/bold cyan]       [dim]batches      & trim      protocol    ready![/dim]
+"""
+
+
+DATAFLOW_PARSER = """
+  [dim]VCF File ──▶[/dim] [bold green]Parser[/bold green] [dim]──▶ Normalizer ──▶ COPY ──▶ PostgreSQL[/dim]
+     [dim]│[/dim]           │            [dim]│           │           │[/dim]
+     [dim]│[/dim]           │            [dim]│           │           │[/dim]
+   [dim]Input[/dim]     [bold green]Streaming[/bold green]    [dim]Left-align   Binary      Query[/dim]
+   [dim]file[/dim]       [bold green]batches[/bold green]      [dim]& trim      protocol    ready![/dim]
+"""
+
+
+DATAFLOW_NORMALIZER = """
+  [dim]VCF File ──▶ Parser ──▶[/dim] [bold yellow]Normalizer[/bold yellow] [dim]──▶ COPY ──▶ PostgreSQL[/dim]
+     [dim]│           │[/dim]            │           [dim]│           │[/dim]
+     [dim]│           │[/dim]            │           [dim]│           │[/dim]
+   [dim]Input     Streaming[/dim]    [bold yellow]Left-align[/bold yellow]   [dim]Binary      Query[/dim]
+   [dim]file       batches[/dim]      [bold yellow]& trim[/bold yellow]      [dim]protocol    ready![/dim]
+"""
+
+
+DATAFLOW_COPY = """
+  [dim]VCF File ──▶ Parser ──▶ Normalizer ──▶[/dim] [bold blue]COPY[/bold blue] [dim]──▶ PostgreSQL[/dim]
+     [dim]│           │            │[/dim]           │           [dim]│[/dim]
+     [dim]│           │            │[/dim]           │           [dim]│[/dim]
+   [dim]Input     Streaming    Left-align[/dim]   [bold blue]Binary[/bold blue]      [dim]Query[/dim]
+   [dim]file       batches      & trim[/dim]      [bold blue]protocol[/bold blue]    [dim]ready![/dim]
+"""
+
+
+DATAFLOW_POSTGRES = """
+  [dim]VCF File ──▶ Parser ──▶ Normalizer ──▶ COPY ──▶[/dim] [bold green]PostgreSQL[/bold green]
+     [dim]│           │            │           │[/dim]           │
+     [dim]│           │            │           │[/dim]           │
+   [dim]Input     Streaming    Left-align   Binary[/dim]      [bold green]Query[/bold green]
+   [dim]file       batches      & trim      protocol[/dim]    [bold green]ready![/bold green]
+"""
+
+
+def dataflow_input_panel() -> Panel:
+    text = Text.from_markup(DATAFLOW_INPUT)
+    return Panel(text, title="[bold]Step 1: VCF File Input[/bold]", border_style="cyan")
+
+
+def dataflow_parser_panel() -> Panel:
+    text = Text.from_markup(DATAFLOW_PARSER)
+    return Panel(text, title="[bold]Step 2: Streaming Parser[/bold]", border_style="green")
+
+
+def dataflow_normalizer_panel() -> Panel:
+    text = Text.from_markup(DATAFLOW_NORMALIZER)
+    return Panel(text, title="[bold]Step 3: Variant Normalization[/bold]", border_style="yellow")
+
+
+def dataflow_copy_panel() -> Panel:
+    text = Text.from_markup(DATAFLOW_COPY)
+    return Panel(text, title="[bold]Step 4: Binary COPY Protocol[/bold]", border_style="blue")
+
+
+def dataflow_postgres_panel() -> Panel:
+    text = Text.from_markup(DATAFLOW_POSTGRES)
+    return Panel(text, title="[bold]Step 5: PostgreSQL Ready[/bold]", border_style="green")
 
 
 def rare_disease_pipeline_panel() -> Panel:

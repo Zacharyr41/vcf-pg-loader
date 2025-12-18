@@ -246,7 +246,7 @@ That's what a researcher manually reviews.
 
 And here's the key insight: researchers **iterate**. They try one set of filters, look at the results, then tweak the filters and try again.
 
-If every tweak requires re-running an entire pipeline... that's hours of waiting. But if the data is in a database? A new query takes **seconds**.
+If every tweak requires re-running an entire pipeline... that's a lot of time spent waiting for pipeliens to complete. But if the data is stashed in a database that is optimized for future queires? A new query takes **seconds**.
 
 ---
 
@@ -270,7 +270,7 @@ Then came slivar in 2021. Blazing fast streaming filter. Great for one-shot anal
 
 So there's a gap. We need GEMINI's query flexibility, slivar's speed, plus multi-user access, audit trails for clinical compliance, and the ability to add samples mid-study.
 
-That's what vcf-pg-loader provides.
+That's what my tool, vcf-pg-loader, provides.
 
 ---
 
@@ -284,53 +284,119 @@ GEMINI: SQLite, about 5,000 variants per second, limited scaling.
 slivar: No database, streaming only.
 vcf-pg-loader: PostgreSQL, over 100,000 variants per second, unlimited concurrent access.
 
-**[Slide 29: Architecture]**
+**[Slide 29: Architecture Overview]**
 
-Here's how it works under the hood.
+Here's the overall architecture. At the top is vcf-pg-loader itself—highlighted in cyan. It coordinates four main components that work together to transform a VCF file into a queryable PostgreSQL database. Let me walk through each one.
 
-VCF files stream through cyvcf2—a fast C-based parser. Variants get normalized using the vt algorithm. Then they're loaded into PostgreSQL using the binary COPY protocol—that's the fastest way to insert data into Postgres.
+**[Slide 30: VCF Parser (cyvcf2)]**
 
-**[Slide 30: Data Flow]**
+First, the VCF Parser—highlighted in green. This uses **cyvcf2**, a Python wrapper around htslib written by Brent Pedersen. The same Brent Pedersen who created slivar. cyvcf2 is written in C and Cython for speed.
 
-The flow is simple: VCF in, streaming parser, normalization, binary COPY, PostgreSQL. Query ready.
+Why does this matter? VCF files can be huge—millions of variants. You can't load the whole file into memory. cyvcf2 streams through the file, reading one variant at a time. We batch these variants—say, 10,000 at a time—so we're not making a million individual database calls.
 
-**[Slide 31: Components]**
+The parser also handles the complexity of INFO and FORMAT field types. Remember Number=A, Number=R, Number=G from earlier? cyvcf2 knows how to unpack those correctly based on the header definitions.
 
-Four key components. The parser handles streaming and batching. The normalizer left-aligns indels and decomposes multi-allelics. Binary COPY uses asyncpg for maximum throughput. And the schema manager handles partitioning by chromosome.
+**[Slide 31: Normalizer]**
 
-**[Slide 32: Zero-Config]**
+Next, the Normalizer—highlighted in yellow. This is where we clean up the variants before loading them.
 
-And here's the best part: you don't need to set up PostgreSQL yourself. Just run the command. vcf-pg-loader spins up a managed database in Docker, loads your data, and you're querying within minutes.
+**Left-alignment** is critical. The same insertion can be represented multiple ways in a VCF file depending on where you anchor it. If two VCFs represent the same variant differently, you'll miss matches. Left-alignment standardizes the representation—it's called the "vt" algorithm after the tool that pioneered it.
+
+**Trimming** removes redundant reference bases. Sometimes variant callers pad variants with extra bases that aren't necessary.
+
+**Decomposition** handles multi-allelic sites. Remember those? When you have two different alternates at one position? We split them into separate records so each variant gets its own row in the database. This makes queries much simpler.
+
+**[Slide 32: Schema Manager]**
+
+The Schema Manager—highlighted in magenta—handles the database structure.
+
+**DDL generation** means it creates the tables and columns automatically. You don't need to predefine a schema. The tool inspects the VCF header and creates appropriate columns for whatever INFO and FORMAT fields your VCF contains.
+
+**Partitioning** is a PostgreSQL feature where we split the variants table by chromosome. Chromosome 1 variants go in one partition, chromosome 2 in another. When you query "WHERE chrom = 'chr1'", PostgreSQL only scans that partition—much faster than scanning the whole table.
+
+**Index management** ensures fast lookups. We create indexes on the columns you'll query most often—chromosome, position, gene symbol, variant impact.
+
+**[Slide 33: Binary COPY (asyncpg)]**
+
+Now the magic—Binary COPY, highlighted in blue. This is why vcf-pg-loader is fast.
+
+PostgreSQL has multiple ways to insert data. Regular INSERT statements are slow—one round trip per row. Even batched INSERTs have overhead. But COPY is PostgreSQL's bulk loading mechanism. It streams binary data directly into the table with minimal parsing overhead.
+
+We use **asyncpg**, an async PostgreSQL driver written in Cython. It supports the binary COPY protocol natively. Parallel workers prepare batches while others are writing. The result: over 100,000 variants per second sustained throughput.
+
+That's 20 times faster than GEMINI. A whole exome in seconds. A whole genome in under a minute.
+
+**[Slide 34: PostgreSQL]**
+
+Finally, the destination—PostgreSQL itself, highlighted in green.
+
+Why PostgreSQL? First, it's **partitioned**. We talked about chromosome partitions. This makes range queries fast. Second, it supports **full SQL**. Not a custom query language—standard SQL that everyone knows. Third, **concurrent access**—multiple researchers can query simultaneously. Fourth, **audit trail**—we track every load with timestamps and checksums.
+
+PostgreSQL is also battle-tested. Banks use it. Governments use it. It handles petabytes of data in production. And every cloud provider offers managed PostgreSQL—AWS RDS, Google Cloud SQL, Azure Database. Your infrastructure team already knows how to run it.
+
+**[Slide 35: Data Flow — VCF Input]**
+
+Now let me show you the data flow, step by step. It starts with your VCF file—highlighted here in cyan.
+
+This is your input. Could be a single sample from a patient. Could be a multi-sample joint call from a cohort. Could be gzipped with bgzip or uncompressed. The tool handles all of these.
+
+**[Slide 36: Data Flow — Streaming Parser]**
+
+The file streams through the parser—highlighted in green.
+
+No loading the whole file into memory. Variants flow through in batches. Each batch gets processed and passed to the next stage while the parser reads ahead to prepare the next batch. It's a pipeline, always moving.
+
+**[Slide 37: Data Flow — Normalization]**
+
+Each batch passes through the normalizer—highlighted in yellow.
+
+Left-align, trim, decompose. Every variant gets standardized. When you load a second VCF from a different lab or different variant caller, the same biological variant will have the same representation. That's essential for cohort analysis.
+
+**[Slide 38: Data Flow — Binary COPY]**
+
+Normalized batches stream into PostgreSQL via binary COPY—highlighted in blue.
+
+The protocol is optimized for throughput. Minimal serialization overhead. Direct binary transfer. This is the bottleneck for most database loaders, but asyncpg and binary COPY remove that bottleneck.
+
+**[Slide 39: Data Flow — Query Ready]**
+
+And out the other end—PostgreSQL, highlighted in green—your data is query ready.
+
+The moment the load completes, you can start querying. No indexing step. No post-processing. The indexes are built as you go. Open a SQL shell and start exploring your variants immediately.
+
+**[Slide 40: Zero-Config]**
+
+And here's the best part: you don't need to set up PostgreSQL yourself. Just run the command. vcf-pg-loader spins up a managed database in Docker, loads your data, and you're querying within minutes. Zero configuration required for getting started.
 
 ---
 
 ### Section 6: Research Pipeline Walkthrough
 
-**[Slide 33: Pipeline Overview]**
+**[Slide 41: Pipeline Overview]**
 
 Let me walk you through a real rare disease analysis.
 
 You have a trio: child, mother, father. Three VCF files. You want to find de novo variants—mutations that appeared in the child but aren't in either parent.
 
-**[Slide 34: Load the Data]**
+**[Slide 42: Load the Data]**
 
 Step one: load all three VCFs. One command per file. Takes maybe 30 seconds each.
 
-**[Slide 35: Query for Candidates]**
+**[Slide 43: Query for Candidates]**
 
 Step two: write a SQL query. Give me variants in the proband that are rare, HIGH or MODERATE impact, and not classified as benign.
 
 That query runs in seconds. Returns your candidates.
 
-**[Slide 36: Compound Heterozygotes]**
+**[Slide 44: Compound Heterozygotes]**
 
 Want to check for compound heterozygotes—two different damaging variants in the same gene? That's another SQL query. Group by gene, count heterozygous variants, filter for genes with two or more.
 
-**[Slide 37: Adding Samples]**
+**[Slide 45: Adding Samples]**
 
 Now here's where it gets powerful. Mid-study, a sibling's sample arrives. Just load it. No re-processing. The new sample is immediately queryable alongside the existing data.
 
-**[Slide 38: Iterative Research]**
+**[Slide 46: Iterative Research]**
 
 Compare the workflows. Traditional: new filter idea, re-run pipeline, wait hours, review results. With vcf-pg-loader: new filter idea, write SQL, execute in seconds, review results. Iterate as fast as you can think.
 
@@ -338,23 +404,23 @@ Compare the workflows. Traditional: new filter idea, re-run pipeline, wait hours
 
 ### Section 7: Performance & Compliance
 
-**[Slide 39: Benchmarks]**
+**[Slide 47: Benchmarks]**
 
 Let's talk numbers.
 
 100,000 variants: about 1.2 seconds to load. A million variants: 11 seconds. Five million: under a minute. Sustained throughput of 90,000+ variants per second.
 
-**[Slide 40: Why PostgreSQL?]**
+**[Slide 48: Why PostgreSQL?]**
 
 Why PostgreSQL specifically?
 
 Performance: binary protocol, parallel queries, advanced optimizer. Reliability: ACID compliance, point-in-time recovery. Ecosystem: every BI tool connects to Postgres. Cloud providers all offer managed Postgres.
 
-**[Slide 41: Clinical Compliance]**
+**[Slide 49: Clinical Compliance]**
 
 For clinical work, you need audit trails. Every load is tracked—timestamp, source file, MD5 checksum. You can trace any variant back to its origin. Role-based access control. SSL encryption. HIPAA-compatible infrastructure.
 
-**[Slide 42: Validation]**
+**[Slide 50: Validation]**
 
 And validation is built in. Post-load verification, duplicate detection, batch IDs linking variants to source files. Everything is reproducible.
 
@@ -362,23 +428,23 @@ And validation is built in. Post-load verification, duplicate detection, batch I
 
 ### Section 8: Future
 
-**[Slide 43: The Vision]**
+**[Slide 51: The Vision]**
 
 Let me show you where this is going.
 
 Right now, we find exact matches. Variants that pass specific filters. But what if we could find **similar** cases?
 
-**[Slide 44: Vector Architecture]**
+**[Slide 52: Vector Architecture]**
 
 Imagine embedding each variant profile as a vector. Gene context, consequence type, pathogenicity scores, even phenotype terms. Store these in pgvector—PostgreSQL's vector extension.
 
-**[Slide 45: Applications]**
+**[Slide 53: Applications]**
 
 Now you can ask: show me patients with variant profiles **similar** to this undiagnosed case. Surface diagnoses from cases that looked like this one. Find research candidates with matching patterns.
 
 It's a different way of thinking about genomic data.
 
-**[Slide 46: Thank You]**
+**[Slide 54: Thank You]**
 
 vcf-pg-loader is open source. Available on PyPI, Bioconda, and GitHub.
 
