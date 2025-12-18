@@ -178,9 +178,13 @@ Here's a deletion. The reference has ACTG—four bases. This patient just has A.
 
 **[Slide 16: Multi-allelic Variants]**
 
-Sometimes, at a single position, you find **multiple** different variants. See the ALT column? A comma T. Two different alternates at the same spot.
+Sometimes, at a single position, you find **multiple** different variants. See the ALT column? G comma T. Two different alternates at the same spot.
 
-These are called multi-allelic sites, and they need special handling. Most tools split them into separate records for analysis.
+How does this happen? Remember, you have two copies of each chromosome—one from mom, one from dad. At this position, maybe mom's chromosome has A→G and dad's has A→T. So your genotype would be 1/2—the first alternate on one chromosome, the second alternate on the other.
+
+Or in a population VCF with many samples, different people might have different variants at the same position. One person is A→G, another is A→T. The VCF combines them into one line with multiple alternates.
+
+These are called multi-allelic sites, and they need special handling. The genotype numbers now go higher: 0 is reference, 1 is first alternate, 2 is second alternate. Most analysis tools split multi-allelic sites into separate records—one per alternate—to simplify downstream processing.
 
 **[Slide 17: INFO Field Numbers]**
 
