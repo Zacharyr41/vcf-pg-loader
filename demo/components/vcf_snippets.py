@@ -1,6 +1,8 @@
+from rich.console import Group
 from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
+from rich.text import Text
 
 VCF_HEADER_EXAMPLE = """##fileformat=VCFv4.2
 ##INFO=<ID=AC,Number=A,Type=Integer,Description="Allele count">
@@ -105,6 +107,164 @@ def vcf_columns_table() -> Table:
     table.add_row("9", "FORMAT", "Sample field format", "GT:AD:GQ")
     table.add_row("10+", "SAMPLES", "Per-sample data", "0/1:15,15:99")
     return table
+
+
+VCF_LINE_HEADER = (
+    "#CHROM  POS      ID         REF  ALT  QUAL   FILTER  INFO              FORMAT     SAMPLE"
+)
+VCF_LINE_DATA = (
+    "chr1    12345    rs123456   A    G    99.5   PASS    AC=1;AF=0.5;DP=30 GT:AD:GQ   0/1:15,15:99"
+)
+
+
+def vcf_column_location_panel() -> Panel:
+    text = Text()
+    text.append(VCF_LINE_HEADER + "\n", style="bold dim")
+    text.append(VCF_LINE_DATA, style="white")
+    return Panel(
+        text,
+        title="[bold]VCF Data Line[/bold]",
+        subtitle="[dim]Each line = one variant[/dim]",
+        border_style="green",
+    )
+
+
+def vcf_column_chrom_pos_panel() -> Group:
+    text = Text()
+    text.append("#CHROM  POS      ", style="bold yellow")
+    text.append(
+        "ID         REF  ALT  QUAL   FILTER  INFO              FORMAT     SAMPLE\n", style="dim"
+    )
+    text.append("chr1    12345    ", style="bold green")
+    text.append(
+        "rs123456   A    G    99.5   PASS    AC=1;AF=0.5;DP=30 GT:AD:GQ   0/1:15,15:99", style="dim"
+    )
+
+    explanation = Text.from_markup(
+        "\n\n[bold yellow]CHROM[/bold yellow] — Which chromosome (chr1-22, X, Y, MT)\n"
+        "[bold yellow]POS[/bold yellow] — 1-based position on the chromosome\n\n"
+        "[dim]Together, CHROM:POS uniquely identifies the genomic location[/dim]"
+    )
+
+    return Group(
+        Panel(text, title="[bold]Location Columns[/bold]", border_style="yellow"),
+        explanation,
+    )
+
+
+def vcf_column_id_panel() -> Group:
+    text = Text()
+    text.append("#CHROM  POS      ", style="dim")
+    text.append("ID         ", style="bold yellow")
+    text.append("REF  ALT  QUAL   FILTER  INFO              FORMAT     SAMPLE\n", style="dim")
+    text.append("chr1    12345    ", style="dim")
+    text.append("rs123456   ", style="bold green")
+    text.append("A    G    99.5   PASS    AC=1;AF=0.5;DP=30 GT:AD:GQ   0/1:15,15:99", style="dim")
+
+    explanation = Text.from_markup(
+        "\n\n[bold yellow]ID[/bold yellow] — Variant identifier (often from dbSNP)\n\n"
+        "[bold green]rs123456[/bold green] — This is a known variant in dbSNP\n"
+        "[dim]'.' means no known ID (novel variant)[/dim]"
+    )
+
+    return Group(
+        Panel(text, title="[bold]ID Column[/bold]", border_style="yellow"),
+        explanation,
+    )
+
+
+def vcf_column_ref_alt_panel() -> Group:
+    text = Text()
+    text.append("#CHROM  POS      ID         ", style="dim")
+    text.append("REF  ALT  ", style="bold yellow")
+    text.append("QUAL   FILTER  INFO              FORMAT     SAMPLE\n", style="dim")
+    text.append("chr1    12345    rs123456   ", style="dim")
+    text.append("A    G    ", style="bold")
+    text.append("99.5   PASS    AC=1;AF=0.5;DP=30 GT:AD:GQ   0/1:15,15:99", style="dim")
+
+    explanation = Text.from_markup(
+        "\n\n[bold yellow]REF[/bold yellow] — Reference allele (what the genome normally has)\n"
+        "[bold yellow]ALT[/bold yellow] — Alternate allele (what this sample has instead)\n\n"
+        "[green]A[/green] → [red]G[/red] : This is a SNP (single nucleotide change)\n"
+        "[dim]ALT can have multiple values: G,T means two alternate alleles[/dim]"
+    )
+
+    return Group(
+        Panel(text, title="[bold]REF/ALT Columns[/bold]", border_style="yellow"),
+        explanation,
+    )
+
+
+def vcf_column_qual_filter_panel() -> Group:
+    text = Text()
+    text.append("#CHROM  POS      ID         REF  ALT  ", style="dim")
+    text.append("QUAL   FILTER  ", style="bold yellow")
+    text.append("INFO              FORMAT     SAMPLE\n", style="dim")
+    text.append("chr1    12345    rs123456   A    G    ", style="dim")
+    text.append("99.5   PASS    ", style="bold green")
+    text.append("AC=1;AF=0.5;DP=30 GT:AD:GQ   0/1:15,15:99", style="dim")
+
+    explanation = Text.from_markup(
+        "\n\n[bold yellow]QUAL[/bold yellow] — Phred-scaled quality score\n"
+        "  [green]99.5[/green] = very high confidence (higher is better)\n\n"
+        "[bold yellow]FILTER[/bold yellow] — Did this variant pass quality filters?\n"
+        "  [green]PASS[/green] = yes, good quality\n"
+        "  [dim]Other values (LowQual, etc.) = failed some filter[/dim]"
+    )
+
+    return Group(
+        Panel(text, title="[bold]Quality Columns[/bold]", border_style="yellow"),
+        explanation,
+    )
+
+
+def vcf_column_info_panel() -> Group:
+    text = Text()
+    text.append("#CHROM  POS      ID         REF  ALT  QUAL   FILTER  ", style="dim")
+    text.append("INFO              ", style="bold yellow")
+    text.append("FORMAT     SAMPLE\n", style="dim")
+    text.append("chr1    12345    rs123456   A    G    99.5   PASS    ", style="dim")
+    text.append("AC=1;AF=0.5;DP=30 ", style="bold green")
+    text.append("GT:AD:GQ   0/1:15,15:99", style="dim")
+
+    explanation = Text.from_markup(
+        "\n\n[bold yellow]INFO[/bold yellow] — Variant-level annotations (key=value pairs)\n\n"
+        "[cyan]AC=1[/cyan]    Allele Count: 1 chromosome carries this variant\n"
+        "[cyan]AF=0.5[/cyan]  Allele Frequency: 50% of chromosomes in this sample\n"
+        "[cyan]DP=30[/cyan]   Depth: 30 reads covered this position\n\n"
+        "[dim]INFO fields are defined in the header and vary by caller[/dim]"
+    )
+
+    return Group(
+        Panel(text, title="[bold]INFO Column[/bold]", border_style="yellow"),
+        explanation,
+    )
+
+
+def vcf_column_format_sample_panel() -> Group:
+    text = Text()
+    text.append(
+        "#CHROM  POS      ID         REF  ALT  QUAL   FILTER  INFO              ", style="dim"
+    )
+    text.append("FORMAT     SAMPLE\n", style="bold yellow")
+    text.append(
+        "chr1    12345    rs123456   A    G    99.5   PASS    AC=1;AF=0.5;DP=30 ", style="dim"
+    )
+    text.append("GT:AD:GQ   0/1:15,15:99", style="bold green")
+
+    explanation = Text.from_markup(
+        "\n\n[bold yellow]FORMAT[/bold yellow] — Defines the order of sample fields\n"
+        "[bold yellow]SAMPLE[/bold yellow] — Per-sample data (one column per sample)\n\n"
+        "[cyan]GT[/cyan] = [green]0/1[/green]      Genotype: heterozygous (0=ref, 1=alt)\n"
+        "[cyan]AD[/cyan] = [green]15,15[/green]   Allelic Depth: 15 ref reads, 15 alt reads\n"
+        "[cyan]GQ[/cyan] = [green]99[/green]      Genotype Quality: very confident\n\n"
+        "[dim]Multi-sample VCFs have multiple sample columns[/dim]"
+    )
+
+    return Group(
+        Panel(text, title="[bold]FORMAT & SAMPLE Columns[/bold]", border_style="yellow"),
+        explanation,
+    )
 
 
 def info_number_table() -> Table:

@@ -37,7 +37,17 @@ Sleep 20s
 Enter
 Sleep 8s
 
-# Part I, Section 2: Anatomy of a VCF File (8 slides)
+# Part I, Section 2: Anatomy of a VCF File (14 slides)
+Enter
+Sleep 8s
+Enter
+Sleep 6s
+Enter
+Sleep 10s
+Enter
+Sleep 8s
+Enter
+Sleep 10s
 Enter
 Sleep 8s
 Enter
@@ -45,11 +55,13 @@ Sleep 10s
 Enter
 Sleep 10s
 Enter
+Sleep 10s
+Enter
 Sleep 8s
 Enter
-Sleep 10s
+Sleep 8s
 Enter
-Sleep 10s
+Sleep 8s
 Enter
 Sleep 8s
 Enter

@@ -12,7 +12,13 @@ from ..components.vcf_snippets import (
     info_number_table,
     rare_disease_filters_table,
     variant_types_table,
-    vcf_columns_table,
+    vcf_column_chrom_pos_panel,
+    vcf_column_format_sample_panel,
+    vcf_column_id_panel,
+    vcf_column_info_panel,
+    vcf_column_location_panel,
+    vcf_column_qual_filter_panel,
+    vcf_column_ref_alt_panel,
     vcf_header_panel,
     vcf_indel_panel,
     vcf_multiallelic_panel,
@@ -83,8 +89,38 @@ def add_section_2(p: Presenter) -> None:
     )
 
     p.slide(
-        "VCF Columns Explained",
-        vcf_columns_table,
+        "VCF Data Line",
+        vcf_column_location_panel,
+    )
+
+    p.slide(
+        "CHROM & POS: Location",
+        vcf_column_chrom_pos_panel,
+    )
+
+    p.slide(
+        "ID: Variant Identifier",
+        vcf_column_id_panel,
+    )
+
+    p.slide(
+        "REF & ALT: The Actual Change",
+        vcf_column_ref_alt_panel,
+    )
+
+    p.slide(
+        "QUAL & FILTER: Quality Control",
+        vcf_column_qual_filter_panel,
+    )
+
+    p.slide(
+        "INFO: Variant Annotations",
+        vcf_column_info_panel,
+    )
+
+    p.slide(
+        "FORMAT & SAMPLE: Per-Sample Data",
+        vcf_column_format_sample_panel,
     )
 
     p.slide(
