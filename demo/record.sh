@@ -13,7 +13,8 @@ show_help() {
     echo "Usage: ./demo/record.sh [options]"
     echo ""
     echo "Options:"
-    echo "  --full     Record the full demo (default)"
+    echo "  --full     Record the full demo (default, slow - 33+ minutes)"
+    echo "  --fast     Record using fast mode (recommended - ~5 minutes)"
     echo "  --part1    Record Part I (Background) only"
     echo "  --part2    Record Part II (Tool) only"
     echo "  --all      Record all versions (full, part1, part2)"
@@ -24,6 +25,9 @@ show_help() {
     echo ""
     echo "Output:"
     echo "  GIF and MP4 files are saved to demo/recordings/"
+    echo ""
+    echo "Fast mode records each slide with minimal delay, then uses ffmpeg"
+    echo "to extend each segment to the narration duration. Much faster!"
 }
 
 check_deps() {
@@ -35,8 +39,14 @@ check_deps() {
 }
 
 record_full() {
-    echo "Recording full demo..."
+    echo "Recording full demo (this will take 33+ minutes)..."
     vhs demo/record.tape
+    echo "Done! Output: demo/recordings/vcf-pg-loader-demo.{gif,mp4}"
+}
+
+record_fast() {
+    echo "Recording full demo using fast mode..."
+    uv run python demo/record_fast.py "$@"
     echo "Done! Output: demo/recordings/vcf-pg-loader-demo.{gif,mp4}"
 }
 
@@ -65,6 +75,9 @@ case "${1:-}" in
     --help|-h)
         show_help
         ;;
+    --fast)
+        record_fast
+        ;;
     --part1)
         record_part1
         ;;
@@ -74,8 +87,14 @@ case "${1:-}" in
     --all)
         record_all
         ;;
-    --full|"")
+    --full)
         record_full
+        ;;
+    "")
+        echo "No option specified. Use --fast (recommended) or --full."
+        echo ""
+        show_help
+        exit 1
         ;;
     *)
         echo "Unknown option: $1"

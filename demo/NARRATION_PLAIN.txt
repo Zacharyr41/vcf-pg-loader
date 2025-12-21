@@ -254,7 +254,7 @@ vcf-pg-loader: PostgreSQL, over 100,000 variants per second, unlimited concurren
 
 ---
 
-Here's the overall architecture. At the top is vcf-pg-loader itself—highlighted in cyan. It coordinates four main components that work together to transform a VCF file into a queryable PostgreSQL database. Let me walk through each one.
+Here's the overall architecture. At the top is vcf-pg-loader itself—highlighted in blue. It coordinates four main components that work together to transform a VCF file into a queryable PostgreSQL database. Let me walk through each one.
 
 ---
 
@@ -340,7 +340,7 @@ And here's the best part: you don't need to set up PostgreSQL yourself. Just run
 
 Let me walk you through a real rare disease analysis.
 
-At the top—highlighted in cyan—you have a trio: child, mother, father. Three VCF files. The proband is the affected individual, the one with symptoms. The parents' VCFs help us understand which variants were inherited and which appeared new.
+At the top—highlighted in blue, you have a trio: child, mother, father. Three VCF files. The proband is the affected individual, the one with symptoms. The parents' VCFs help us understand which variants were inherited and which appeared new.
 
 This is the standard setup for rare disease diagnostics. Sequence the affected child, sequence both biological parents, compare.
 
@@ -440,4 +440,4 @@ vcf-pg-loader is open source. Available on PyPI, Bioconda, and GitHub.
 
 If you work with VCF data and you're tired of waiting for pipelines, give it a try. Load a file. Run a query. See how fast iteration can be.
 
-Thank you.
+Thanks for watching!!
