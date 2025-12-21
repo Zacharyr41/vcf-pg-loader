@@ -1,0 +1,95 @@
+services:
+  vcf-pg-loader:
+    build: .
+    security_opt:
+      - no-new-privileges:true
+      - seccomp:docker/security/seccomp-profile.json
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=100M
+    cap_drop:
+      - ALL
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://vcfloader:vcfloader@postgres:5432/variants?sslmode=require
+      VCF_PG_LOADER_REQUIRE_TLS: "true"
+      VCF_PG_LOADER_TLS_CA_CERT: /certs/ca.crt
+    volumes:
+      - ./data:/data:ro
+      - ./docker/certs:/certs:ro
+    networks:
+      - internal
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    entrypoint: ["vcf-pg-loader"]
+    command: ["--help"]
+
+  postgres:
+    image: postgres:16-alpine
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - FOWNER
+      - DAC_OVERRIDE
+    environment:
+      POSTGRES_USER: vcfloader
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_DB: variants
+    secrets:
+      - postgres_password
+    volumes:
+      - type: volume
+        source: pgdata
+        target: /var/lib/postgresql/data
+      - ./docker/certs:/var/lib/postgresql/certs:ro
+      - ./docker/postgres/conf.d:/etc/postgresql/conf.d:ro
+      - ./docker/postgres/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+    command:
+      - postgres
+      - -c
+      - config_file=/etc/postgresql/postgresql.conf
+      - -c
+      - hba_file=/etc/postgresql/pg_hba.conf
+      - -c
+      - include_dir=/etc/postgresql/conf.d
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/var/lib/postgresql/certs/server.crt
+      - -c
+      - ssl_key_file=/var/lib/postgresql/certs/server.key
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vcfloader -d variants && psql -U vcfloader -d variants -c 'SHOW ssl' | grep -q on"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+networks:
+  internal:
+    driver: bridge
+    internal: true
+
+volumes:
+  pgdata:
+    driver: local
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password.txt
