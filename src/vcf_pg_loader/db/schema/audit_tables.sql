@@ -61,20 +61,37 @@ CREATE TABLE IF NOT EXISTS hipaa_audit_log (
     PRIMARY KEY (created_date, audit_id)
 ) PARTITION BY RANGE (created_date);
 
--- Trigger to ensure created_date matches event_time
-CREATE OR REPLACE FUNCTION set_audit_created_date()
+-- Trigger to ensure created_date matches event_time and compute hash chain
+CREATE OR REPLACE FUNCTION set_audit_created_date_and_hash()
 RETURNS TRIGGER AS $$
+DECLARE
+    hash_input TEXT;
 BEGIN
     NEW.created_date := (NEW.event_time AT TIME ZONE 'UTC')::date;
+
+    IF NEW.previous_hash IS NOT NULL AND NEW.entry_hash IS NULL THEN
+        hash_input := json_build_object(
+            'event_time', NEW.event_time,
+            'event_type', NEW.event_type::text,
+            'user_name', NEW.user_name,
+            'action', NEW.action,
+            'success', NEW.success,
+            'details', COALESCE(NEW.details, '{}'::jsonb),
+            'previous_hash', NEW.previous_hash
+        )::text;
+        NEW.entry_hash := encode(sha256(hash_input::bytea), 'hex');
+    END IF;
+
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS audit_set_created_date ON hipaa_audit_log;
-CREATE TRIGGER audit_set_created_date
+DROP TRIGGER IF EXISTS audit_set_created_date_and_hash ON hipaa_audit_log;
+CREATE TRIGGER audit_set_created_date_and_hash
     BEFORE INSERT ON hipaa_audit_log
     FOR EACH ROW
-    EXECUTE FUNCTION set_audit_created_date();
+    EXECUTE FUNCTION set_audit_created_date_and_hash();
 
 -- Create index on audit_id within partitions for uniqueness
 CREATE INDEX IF NOT EXISTS idx_audit_log_audit_id ON hipaa_audit_log (audit_id);
@@ -258,3 +275,47 @@ WHERE event_type IN (
     'PERMISSION_CHANGE', 'EMERGENCY_ACCESS'
 )
 ORDER BY event_time DESC;
+
+-- Index for hash chain verification (efficient integrity checks)
+CREATE INDEX IF NOT EXISTS idx_audit_entry_hash
+    ON hipaa_audit_log (entry_hash) WHERE entry_hash IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_audit_hash_chain
+    ON hipaa_audit_log (created_date, audit_id) WHERE entry_hash IS NOT NULL;
+
+-- Row-Level Security: Users can only query their own audit entries
+-- Auditors can query all entries; nobody can modify (enforced by triggers)
+ALTER TABLE hipaa_audit_log ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS audit_user_isolation ON hipaa_audit_log;
+CREATE POLICY audit_user_isolation ON hipaa_audit_log
+    FOR SELECT
+    USING (
+        user_name = current_user
+        OR pg_has_role(current_user, 'audit_viewer', 'MEMBER')
+        OR pg_has_role(current_user, 'audit_admin', 'MEMBER')
+        OR current_user = 'postgres'
+    );
+
+DROP POLICY IF EXISTS audit_insert_only ON hipaa_audit_log;
+CREATE POLICY audit_insert_only ON hipaa_audit_log
+    FOR INSERT
+    WITH CHECK (true);
+
+-- Create audit roles if they don't exist
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'audit_viewer') THEN
+        CREATE ROLE audit_viewer;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'audit_admin') THEN
+        CREATE ROLE audit_admin;
+    END IF;
+END$$;
+
+-- Grant permissions to audit roles
+GRANT SELECT ON hipaa_audit_log TO audit_viewer;
+GRANT SELECT ON hipaa_audit_log TO audit_admin;
+GRANT SELECT ON v_audit_summary_by_user TO audit_viewer;
+GRANT SELECT ON v_audit_phi_access TO audit_viewer;
+GRANT SELECT ON v_audit_failed_auth TO audit_viewer;
+GRANT SELECT ON v_audit_security_events TO audit_viewer;

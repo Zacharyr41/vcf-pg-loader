@@ -315,7 +315,12 @@ class TestAuditLogger:
         mock_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
         mock_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=None)
 
+        mock_conn.fetchrow.return_value = {
+            "entry_hash": "abc123" + "0" * 58,
+        }
+
         logger = AuditLogger(pool=mock_pool, batch_size=1)
+        logger._last_hash = "0" * 64
 
         await logger.log_event(
             AuditEvent(
@@ -325,19 +330,21 @@ class TestAuditLogger:
             )
         )
 
-        mock_conn.execute.assert_called_once()
-        call_args = mock_conn.execute.call_args
+        mock_conn.fetchrow.assert_called_once()
+        call_args = mock_conn.fetchrow.call_args
         assert "INSERT INTO hipaa_audit_log" in call_args[0][0]
+        assert "RETURNING entry_hash" in call_args[0][0]
 
     @pytest.mark.asyncio
     async def test_db_failure_falls_back_to_file(self, temp_fallback_path):
         mock_pool = MagicMock()
         mock_conn = AsyncMock()
-        mock_conn.execute.side_effect = Exception("DB error")
+        mock_conn.fetchrow.side_effect = Exception("DB error")
         mock_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
         mock_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=None)
 
         logger = AuditLogger(pool=mock_pool, batch_size=1, fallback_path=temp_fallback_path)
+        logger._last_hash = "0" * 64
 
         await logger.log_event(
             AuditEvent(
