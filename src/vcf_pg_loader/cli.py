@@ -1438,19 +1438,28 @@ def auth_login(
 
             auth = Authenticator(jwt_secret=_get_jwt_secret())
             result = await auth.authenticate(conn, username, password)
-            return result
+            return result, auth.session_config
         finally:
             await conn.close()
 
     try:
-        result = asyncio.run(run_login())
+        result, session_config = asyncio.run(run_login())
 
         if result.status == AuthStatus.SUCCESS and result.token and result.session:
             storage = SessionStorage()
-            storage.save_token(result.token, result.user.username, result.session.expires_at)
+            storage.save_token(
+                result.token,
+                result.user.username,
+                result.session.expires_at,
+                session_id=result.session.session_id,
+                inactivity_timeout_minutes=session_config.inactivity_timeout_minutes,
+            )
             if not quiet:
                 console.print(f"[green]✓[/green] Logged in as {result.user.username}")
                 console.print(f"  Session expires: {result.session.expires_at.isoformat()}")
+                console.print(
+                    f"  Inactivity timeout: {session_config.inactivity_timeout_minutes} minutes"
+                )
         else:
             console.print(f"[red]Login failed: {result.message}[/red]")
             raise typer.Exit(1)
@@ -2015,6 +2024,383 @@ def auth_unlock_user(
         else:
             console.print(f"[red]Failed: {message}[/red]")
             raise typer.Exit(1)
+
+    except Exception as e:
+        if not isinstance(e, SystemExit):
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from None
+        raise
+
+
+session_app = typer.Typer(help="Session management (HIPAA 164.312(a)(2)(iii))")
+app.add_typer(session_app, name="session")
+
+
+@session_app.command("status")
+def session_status(
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Show current session status and remaining time."""
+    import json as json_module
+    from datetime import UTC, datetime
+
+    from .auth import Authenticator, SessionStorage
+
+    storage = SessionStorage()
+    info = storage.get_session_info()
+
+    if not info:
+        console.print("[yellow]No active session[/yellow]")
+        raise typer.Exit(1)
+
+    token = info.get("token")
+    if not token:
+        console.print("[yellow]No active session[/yellow]")
+        raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_status():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            auth = Authenticator(jwt_secret=_get_jwt_secret())
+            session = await auth.validate_session(conn, token, update_activity=False)
+            return session, auth.session_config
+        finally:
+            await conn.close()
+
+    try:
+        session, config = asyncio.run(run_status())
+        now = datetime.now(UTC)
+
+        if session:
+            time_remaining = session.expires_at - now
+            minutes_remaining = int(time_remaining.total_seconds() / 60)
+
+            if json_output:
+                output = {
+                    "session_id": str(session.session_id),
+                    "username": session.username,
+                    "user_id": session.user_id,
+                    "created_at": session.created_at.isoformat(),
+                    "expires_at": session.expires_at.isoformat(),
+                    "last_activity_at": session.last_activity_at.isoformat()
+                    if session.last_activity_at
+                    else None,
+                    "minutes_remaining": minutes_remaining,
+                    "client_ip": session.client_ip,
+                    "inactivity_timeout_minutes": config.inactivity_timeout_minutes,
+                }
+                print(json_module.dumps(output, indent=2))
+            else:
+                console.print("[green]Session Active[/green]")
+                console.print(f"  Username: {session.username}")
+                console.print(f"  Session ID: {session.session_id}")
+                console.print(f"  Created: {session.created_at.isoformat()}")
+                console.print(f"  Expires: {session.expires_at.isoformat()}")
+                console.print(f"  Time remaining: {minutes_remaining} minutes")
+                console.print(f"  Inactivity timeout: {config.inactivity_timeout_minutes} minutes")
+                if session.last_activity_at:
+                    console.print(f"  Last activity: {session.last_activity_at.isoformat()}")
+        else:
+            storage.clear_token()
+            console.print("[yellow]Session expired or invalid[/yellow]")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        if not isinstance(e, SystemExit):
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from None
+        raise
+
+
+@session_app.command("list")
+def session_list(
+    user: Annotated[str | None, typer.Option("--user", "-u", help="Filter by username")] = None,
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """List active sessions (admin only)."""
+    import json as json_module
+
+    from .auth import Authenticator, SessionManager, SessionStorage
+    from .auth.users import UserManager
+
+    storage = SessionStorage()
+    token, _ = storage.load_token()
+
+    if not token:
+        console.print("[red]Not logged in. Use 'vcf-pg-loader auth login' first.[/red]")
+        raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_list():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            auth = Authenticator(jwt_secret=_get_jwt_secret())
+            session = await auth.validate_session(conn, token)
+            if not session:
+                return None, "Session expired or invalid"
+
+            user_id = None
+            if user:
+                user_manager = UserManager()
+                target_user = await user_manager.get_user_by_username(conn, user)
+                if not target_user:
+                    return None, f"User '{user}' not found"
+                user_id = target_user.user_id
+
+            manager = SessionManager()
+            sessions = await manager.list_active_sessions(conn, user_id)
+            return sessions, None
+        finally:
+            await conn.close()
+
+    try:
+        sessions, error = asyncio.run(run_list())
+
+        if error:
+            console.print(f"[red]{error}[/red]")
+            if "expired" in error.lower():
+                storage.clear_token()
+            raise typer.Exit(1)
+
+        if json_output:
+            output = []
+            for s in sessions:
+                output.append(
+                    {
+                        "session_id": str(s["session_id"]),
+                        "user_id": s["user_id"],
+                        "username": s["username"],
+                        "created_at": s["created_at"].isoformat(),
+                        "expires_at": s["expires_at"].isoformat(),
+                        "last_activity_at": s["last_activity_at"].isoformat()
+                        if s["last_activity_at"]
+                        else None,
+                        "client_ip": s["client_ip"],
+                    }
+                )
+            print(json_module.dumps(output, indent=2))
+        else:
+            if not sessions:
+                console.print("[dim]No active sessions[/dim]")
+            else:
+                console.print(f"[bold]Active Sessions ({len(sessions)})[/bold]")
+                for s in sessions:
+                    console.print(f"\n  Session: {s['session_id']}")
+                    console.print(f"    User: {s['username']} (ID: {s['user_id']})")
+                    console.print(f"    Created: {s['created_at'].isoformat()}")
+                    console.print(f"    Expires: {s['expires_at'].isoformat()}")
+                    if s["last_activity_at"]:
+                        console.print(f"    Last activity: {s['last_activity_at'].isoformat()}")
+                    if s["client_ip"]:
+                        console.print(f"    Client IP: {s['client_ip']}")
+
+    except Exception as e:
+        if not isinstance(e, SystemExit):
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from None
+        raise
+
+
+@session_app.command("terminate")
+def session_terminate(
+    session_id: Annotated[str, typer.Argument(help="Session ID to terminate")],
+    reason: Annotated[str, typer.Option("--reason", "-r", help="Termination reason")] = "admin",
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Terminate a specific session (admin only)."""
+    from uuid import UUID
+
+    from .auth import Authenticator, SessionManager, SessionStorage
+
+    storage = SessionStorage()
+    token, _ = storage.load_token()
+
+    if not token:
+        console.print("[red]Not logged in. Use 'vcf-pg-loader auth login' first.[/red]")
+        raise typer.Exit(1)
+
+    try:
+        target_session_id = UUID(session_id)
+    except ValueError:
+        console.print(f"[red]Invalid session ID: {session_id}[/red]")
+        raise typer.Exit(1) from None
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_terminate():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            auth = Authenticator(jwt_secret=_get_jwt_secret())
+            session = await auth.validate_session(conn, token)
+            if not session:
+                return False, "Session expired or invalid"
+
+            manager = SessionManager()
+            success = await manager.terminate_session(conn, target_session_id, reason)
+            if success:
+                return True, f"Session {session_id} terminated"
+            else:
+                return False, f"Session {session_id} not found or already terminated"
+        finally:
+            await conn.close()
+
+    try:
+        success, message = asyncio.run(run_terminate())
+
+        if success:
+            if not quiet:
+                console.print(f"[green]✓[/green] {message}")
+        else:
+            console.print(f"[red]{message}[/red]")
+            if "expired" in message.lower():
+                storage.clear_token()
+            raise typer.Exit(1)
+
+    except Exception as e:
+        if not isinstance(e, SystemExit):
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from None
+        raise
+
+
+@session_app.command("terminate-all")
+def session_terminate_all(
+    user: Annotated[str, typer.Option("--user", "-u", help="Username to terminate sessions for")],
+    reason: Annotated[str, typer.Option("--reason", "-r", help="Termination reason")] = "admin",
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Terminate all sessions for a user (admin only)."""
+    from .auth import Authenticator, SessionManager, SessionStorage
+    from .auth.users import UserManager
+
+    storage = SessionStorage()
+    token, _ = storage.load_token()
+
+    if not token:
+        console.print("[red]Not logged in. Use 'vcf-pg-loader auth login' first.[/red]")
+        raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_terminate():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            auth = Authenticator(jwt_secret=_get_jwt_secret())
+            session = await auth.validate_session(conn, token)
+            if not session:
+                return 0, "Session expired or invalid"
+
+            user_manager = UserManager()
+            target_user = await user_manager.get_user_by_username(conn, user)
+            if not target_user:
+                return 0, f"User '{user}' not found"
+
+            manager = SessionManager()
+            count = await manager.terminate_user_sessions(conn, target_user.user_id, reason)
+            return count, None
+        finally:
+            await conn.close()
+
+    try:
+        count, error = asyncio.run(run_terminate())
+
+        if error:
+            console.print(f"[red]{error}[/red]")
+            if "expired" in error.lower():
+                storage.clear_token()
+            raise typer.Exit(1)
+
+        if not quiet:
+            console.print(f"[green]✓[/green] Terminated {count} session(s) for user '{user}'")
+
+    except Exception as e:
+        if not isinstance(e, SystemExit):
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from None
+        raise
+
+
+@session_app.command("cleanup")
+def session_cleanup(
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Clean up expired sessions."""
+    from .auth import Authenticator, SessionManager, SessionStorage
+
+    storage = SessionStorage()
+    token, _ = storage.load_token()
+
+    if not token:
+        console.print("[red]Not logged in. Use 'vcf-pg-loader auth login' first.[/red]")
+        raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_cleanup():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            auth = Authenticator(jwt_secret=_get_jwt_secret())
+            session = await auth.validate_session(conn, token)
+            if not session:
+                return 0, "Session expired or invalid"
+
+            manager = SessionManager()
+            count = await manager.cleanup_expired_sessions(conn)
+            return count, None
+        finally:
+            await conn.close()
+
+    try:
+        count, error = asyncio.run(run_cleanup())
+
+        if error:
+            console.print(f"[red]{error}[/red]")
+            if "expired" in error.lower():
+                storage.clear_token()
+            raise typer.Exit(1)
+
+        if not quiet:
+            console.print(f"[green]✓[/green] Cleaned up {count} expired session(s)")
 
     except Exception as e:
         if not isinstance(e, SystemExit):

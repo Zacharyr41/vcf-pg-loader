@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS password_history (
 CREATE INDEX IF NOT EXISTS idx_password_history_user ON password_history (user_id, created_at DESC);
 
 -- Active sessions table
+-- HIPAA Reference: 164.312(a)(2)(iii) - Automatic logoff
 CREATE TABLE IF NOT EXISTS user_sessions (
     session_id UUID PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
@@ -59,12 +60,18 @@ CREATE TABLE IF NOT EXISTS user_sessions (
     -- Client info for audit
     client_ip INET,
     client_hostname TEXT,
-    application_name TEXT DEFAULT 'vcf-pg-loader'
+    application_name TEXT DEFAULT 'vcf-pg-loader',
+
+    -- Session status
+    is_active BOOLEAN DEFAULT true,
+    terminated_reason VARCHAR(50),
+    terminated_at TIMESTAMPTZ
 );
 
-CREATE INDEX IF NOT EXISTS idx_sessions_user ON user_sessions (user_id);
-CREATE INDEX IF NOT EXISTS idx_sessions_expires ON user_sessions (expires_at);
-CREATE INDEX IF NOT EXISTS idx_sessions_token ON user_sessions (token_hash);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON user_sessions (user_id) WHERE is_active;
+CREATE INDEX IF NOT EXISTS idx_sessions_expires ON user_sessions (expires_at) WHERE is_active;
+CREATE INDEX IF NOT EXISTS idx_sessions_token ON user_sessions (token_hash) WHERE is_active;
+CREATE INDEX IF NOT EXISTS idx_sessions_active ON user_sessions (user_id, is_active) WHERE is_active;
 
 -- Trigger to update updated_at on users table
 CREATE OR REPLACE FUNCTION update_users_updated_at()
@@ -81,15 +88,58 @@ CREATE TRIGGER users_updated_at
     FOR EACH ROW
     EXECUTE FUNCTION update_users_updated_at();
 
--- Function to clean expired sessions
+-- Function to clean expired sessions (mark as terminated)
 CREATE OR REPLACE FUNCTION cleanup_expired_sessions()
 RETURNS INTEGER AS $$
 DECLARE
-    deleted_count INTEGER;
+    terminated_count INTEGER;
 BEGIN
-    DELETE FROM user_sessions WHERE expires_at < NOW();
-    GET DIAGNOSTICS deleted_count = ROW_COUNT;
-    RETURN deleted_count;
+    UPDATE user_sessions
+    SET is_active = false,
+        terminated_reason = 'timeout',
+        terminated_at = NOW()
+    WHERE is_active = true
+      AND (expires_at < NOW() OR last_activity_at < NOW() - INTERVAL '30 minutes');
+    GET DIAGNOSTICS terminated_count = ROW_COUNT;
+    RETURN terminated_count;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Function to terminate a specific session
+CREATE OR REPLACE FUNCTION terminate_session(
+    p_session_id UUID,
+    p_reason VARCHAR(50)
+)
+RETURNS BOOLEAN AS $$
+DECLARE
+    updated BOOLEAN;
+BEGIN
+    UPDATE user_sessions
+    SET is_active = false,
+        terminated_reason = p_reason,
+        terminated_at = NOW()
+    WHERE session_id = p_session_id AND is_active = true;
+    GET DIAGNOSTICS updated = ROW_COUNT;
+    RETURN updated > 0;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Function to terminate all sessions for a user
+CREATE OR REPLACE FUNCTION terminate_user_sessions(
+    p_user_id INTEGER,
+    p_reason VARCHAR(50)
+)
+RETURNS INTEGER AS $$
+DECLARE
+    terminated_count INTEGER;
+BEGIN
+    UPDATE user_sessions
+    SET is_active = false,
+        terminated_reason = p_reason,
+        terminated_at = NOW()
+    WHERE user_id = p_user_id AND is_active = true;
+    GET DIAGNOSTICS terminated_count = ROW_COUNT;
+    RETURN terminated_count;
 END;
 $$ LANGUAGE plpgsql;
 

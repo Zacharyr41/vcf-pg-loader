@@ -1,6 +1,7 @@
 """HIPAA-compliant authentication with Argon2id hashing.
 
 HIPAA Reference: 164.312(d) - Person or Entity Authentication
+HIPAA Reference: 164.312(a)(2)(iii) - Automatic logoff
 NIST 800-63B aligned password requirements.
 """
 
@@ -15,7 +16,9 @@ import jwt
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerifyMismatchError
 
+from ..audit.logger import AuditLogger
 from .models import AuthResult, AuthStatus, PasswordPolicy, Session, TokenPayload, User
+from .session_manager import SessionConfig, SessionManager
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +31,9 @@ class Authenticator:
         self,
         jwt_secret: str | None = None,
         password_policy: PasswordPolicy | None = None,
-        token_expiry_hours: int = DEFAULT_TOKEN_EXPIRY_HOURS,
+        token_expiry_hours: int | None = None,
+        session_config: SessionConfig | None = None,
+        audit_logger: AuditLogger | None = None,
     ):
         self._hasher = PasswordHasher(
             time_cost=3,
@@ -39,7 +44,22 @@ class Authenticator:
         )
         self._jwt_secret = jwt_secret or secrets.token_hex(32)
         self._policy = password_policy or PasswordPolicy()
-        self._token_expiry_hours = token_expiry_hours
+        self._session_config = session_config or SessionConfig()
+        self._token_expiry_hours = (
+            token_expiry_hours
+            if token_expiry_hours is not None
+            else self._session_config.absolute_timeout_hours
+        )
+        self._session_manager = SessionManager(self._session_config, audit_logger)
+        self._audit_logger = audit_logger
+
+    @property
+    def session_config(self) -> SessionConfig:
+        return self._session_config
+
+    @property
+    def session_manager(self) -> SessionManager:
+        return self._session_manager
 
     def hash_password(self, password: str) -> str:
         return self._hasher.hash(password)
@@ -192,6 +212,8 @@ class Authenticator:
                 new_hash,
             )
 
+        await self._session_manager.enforce_concurrent_limit(conn, user.user_id)
+
         session = await self._create_session(conn, user, client_ip, client_hostname)
         token = self._generate_token(session)
 
@@ -242,7 +264,12 @@ class Authenticator:
 
         return session
 
-    async def validate_session(self, conn: asyncpg.Connection, token: str) -> Session | None:
+    async def validate_session(
+        self,
+        conn: asyncpg.Connection,
+        token: str,
+        update_activity: bool = True,
+    ) -> Session | None:
         payload = self.decode_token(token)
         if not payload:
             return None
@@ -252,34 +279,8 @@ class Authenticator:
         except ValueError:
             return None
 
-        row = await conn.fetchrow(
-            """
-            SELECT s.session_id, s.user_id, u.username, s.created_at, s.expires_at,
-                   s.last_activity_at, s.client_ip, s.client_hostname
-            FROM user_sessions s
-            JOIN users u ON s.user_id = u.user_id
-            WHERE s.session_id = $1 AND s.expires_at > NOW() AND u.is_active = true
-            """,
-            session_id,
-        )
-
-        if not row:
-            return None
-
-        await conn.execute(
-            "UPDATE user_sessions SET last_activity_at = NOW() WHERE session_id = $1",
-            session_id,
-        )
-
-        return Session(
-            session_id=row["session_id"],
-            user_id=row["user_id"],
-            username=row["username"],
-            created_at=row["created_at"],
-            expires_at=row["expires_at"],
-            last_activity_at=row["last_activity_at"],
-            client_ip=str(row["client_ip"]) if row["client_ip"] else None,
-            client_hostname=row["client_hostname"],
+        return await self._session_manager.validate_session(
+            conn, session_id, update_activity=update_activity
         )
 
     async def logout(self, conn: asyncpg.Connection, token: str) -> bool:
@@ -292,13 +293,15 @@ class Authenticator:
         except ValueError:
             return False
 
-        result = await conn.execute("DELETE FROM user_sessions WHERE session_id = $1", session_id)
-        return result == "DELETE 1"
+        return await self._session_manager.terminate_session(conn, session_id, "logout")
 
-    async def logout_all_sessions(self, conn: asyncpg.Connection, user_id: int) -> int:
-        result = await conn.execute("DELETE FROM user_sessions WHERE user_id = $1", user_id)
-        count_str = result.split()[-1]
-        return int(count_str) if count_str.isdigit() else 0
+    async def logout_all_sessions(
+        self,
+        conn: asyncpg.Connection,
+        user_id: int,
+        reason: str = "logout",
+    ) -> int:
+        return await self._session_manager.terminate_user_sessions(conn, user_id, reason)
 
     async def change_password(
         self,
@@ -361,6 +364,6 @@ class Authenticator:
                 expires_at,
             )
 
-            await conn.execute("DELETE FROM user_sessions WHERE user_id = $1", user_id)
+            await self._session_manager.terminate_user_sessions(conn, user_id, "password_change")
 
         return True, "Password changed successfully"

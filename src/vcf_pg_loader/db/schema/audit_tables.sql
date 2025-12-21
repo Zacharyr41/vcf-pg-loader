@@ -10,6 +10,8 @@ BEGIN
             'AUTH_LOGIN',
             'AUTH_LOGOUT',
             'AUTH_FAILED',
+            'SESSION_TIMEOUT',
+            'SESSION_TERMINATED',
             'DATA_READ',
             'DATA_WRITE',
             'DATA_DELETE',
@@ -20,6 +22,13 @@ BEGIN
             'PHI_ACCESS',
             'EMERGENCY_ACCESS'
         );
+    ELSE
+        IF NOT EXISTS (SELECT 1 FROM pg_enum WHERE enumlabel = 'SESSION_TIMEOUT' AND enumtypid = 'audit_event_type'::regtype) THEN
+            ALTER TYPE audit_event_type ADD VALUE 'SESSION_TIMEOUT';
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_enum WHERE enumlabel = 'SESSION_TERMINATED' AND enumtypid = 'audit_event_type'::regtype) THEN
+            ALTER TYPE audit_event_type ADD VALUE 'SESSION_TERMINATED';
+        END IF;
     END IF;
 END$$;
 
@@ -272,6 +281,7 @@ SELECT
 FROM hipaa_audit_log
 WHERE event_type IN (
     'AUTH_LOGIN', 'AUTH_LOGOUT', 'AUTH_FAILED',
+    'SESSION_TIMEOUT', 'SESSION_TERMINATED',
     'PERMISSION_CHANGE', 'EMERGENCY_ACCESS'
 )
 ORDER BY event_time DESC;
