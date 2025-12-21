@@ -289,6 +289,13 @@ def load(
     anonymize: bool = typer.Option(
         True, "--anonymize/--no-anonymize", help="Anonymize sample IDs for HIPAA compliance"
     ),
+    sanitize_headers: bool = typer.Option(
+        True, "--sanitize-headers/--no-sanitize-headers", help="Sanitize VCF headers to remove PHI"
+    ),
+    phi_scan: bool = typer.Option(False, "--phi-scan", help="Scan for PHI before loading"),
+    fail_on_phi: bool = typer.Option(
+        False, "--fail-on-phi", help="Fail if PHI is detected during scan"
+    ),
 ) -> None:
     """Load a VCF file into PostgreSQL.
 
@@ -333,6 +340,9 @@ def load(
             log_level="DEBUG" if verbose else ("WARNING" if quiet else base_config.log_level),
             tls_config=tls_config,
             anonymize=anonymize,
+            sanitize_headers=sanitize_headers,
+            phi_scan=phi_scan,
+            fail_on_phi=fail_on_phi,
         )
     else:
         tls_config = TLSConfig(require_tls=require_tls)
@@ -345,6 +355,9 @@ def load(
             log_level="DEBUG" if verbose else ("WARNING" if quiet else "INFO"),
             tls_config=tls_config,
             anonymize=anonymize,
+            sanitize_headers=sanitize_headers,
+            phi_scan=phi_scan,
+            fail_on_phi=fail_on_phi,
         )
 
     loader = VCFLoader(resolved_db_url, config)
@@ -3058,6 +3071,192 @@ def phi_generate_key() -> None:
     console.print("[yellow]Store this key securely![/yellow]")
     console.print("Set as environment variable:")
     console.print(f"  export VCF_PG_LOADER_PHI_KEY='{key_b64}'")
+
+
+@phi_app.command("scan")
+def phi_scan(
+    vcf_path: Path = typer.Argument(..., help="Path to VCF file to scan"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+) -> None:
+    """Scan a VCF file for potential PHI in headers.
+
+    Checks for patterns like patient IDs, MRNs, file paths, dates, and institution names.
+    """
+    import json
+
+    from .phi import PHIScanner
+
+    if not vcf_path.exists():
+        console.print(f"[red]Error: VCF file not found: {vcf_path}[/red]")
+        raise typer.Exit(1)
+
+    scanner = PHIScanner()
+    result = scanner.scan_vcf_for_phi(vcf_path)
+
+    if json_output:
+        output = {
+            "has_phi": result.has_phi,
+            "risk_level": result.risk_level,
+            "summary": result.summary,
+            "findings": result.findings,
+        }
+        console.print(json.dumps(output, indent=2))
+    else:
+        if result.has_phi:
+            console.print(f"[yellow]⚠[/yellow]  PHI detected (risk level: {result.risk_level})")
+            console.print()
+            console.print("[bold]Summary:[/bold]")
+            for pattern_type, count in result.summary.items():
+                console.print(f"  {pattern_type}: {count}")
+            console.print()
+            console.print("[bold]Findings:[/bold]")
+            for finding in result.findings[:10]:
+                console.print(f"  Line {finding['line']}: [{finding['type']}] {finding['value']}")
+            if len(result.findings) > 10:
+                console.print(f"  ... and {len(result.findings) - 10} more")
+        else:
+            console.print("[green]✓[/green] No PHI detected in VCF headers")
+
+
+@phi_app.command("sanitize")
+def phi_sanitize(
+    vcf_path: Path = typer.Argument(..., help="Path to VCF file to sanitize"),
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Output file path (default: stdout)"),
+    ] = None,
+    preview: bool = typer.Option(False, "--preview", "-p", help="Preview changes without writing"),
+) -> None:
+    """Sanitize a VCF file by removing PHI from headers.
+
+    Creates a new VCF file with sanitized headers. Original file is not modified.
+    """
+    import gzip
+
+    from .phi import VCFHeaderSanitizer
+
+    if not vcf_path.exists():
+        console.print(f"[red]Error: VCF file not found: {vcf_path}[/red]")
+        raise typer.Exit(1)
+
+    sanitizer = VCFHeaderSanitizer()
+    is_gzipped = str(vcf_path).endswith(".gz")
+    opener = gzip.open if is_gzipped else open
+
+    with opener(vcf_path, "rt") as f:
+        header_lines = []
+        data_lines = []
+        in_header = True
+        for line in f:
+            if in_header and line.startswith("#"):
+                header_lines.append(line.rstrip())
+            else:
+                in_header = False
+                data_lines.append(line)
+
+    header_text = "\n".join(header_lines)
+    result = sanitizer.sanitize_header(header_text)
+
+    if preview:
+        console.print("[bold]Sanitization Preview:[/bold]")
+        console.print(f"  Items to sanitize: {len(result.removed_items)}")
+        console.print()
+        if result.removed_items:
+            console.print("[bold]Changes:[/bold]")
+            for item in result.removed_items[:20]:
+                console.print(
+                    f"  Line {item.line_number} [{item.pattern_matched}]: "
+                    f"{item.original_value[:40]}... → {item.sanitized_value}"
+                )
+            if len(result.removed_items) > 20:
+                console.print(f"  ... and {len(result.removed_items) - 20} more")
+        return
+
+    sanitized_content = "\n".join(result.sanitized_lines) + "\n" + "".join(data_lines)
+
+    if output:
+        out_opener = gzip.open if str(output).endswith(".gz") else open
+        with out_opener(output, "wt") as f:
+            f.write(sanitized_content)
+        console.print(f"[green]✓[/green] Sanitized VCF written to {output}")
+        console.print(f"  Removed {len(result.removed_items)} PHI items")
+    else:
+        console.print(sanitized_content)
+
+
+@phi_app.command("report")
+def phi_report(
+    batch_id: Annotated[str, typer.Argument(..., help="Load batch UUID")],
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Show PHI sanitization report for a load batch.
+
+    Displays what PHI was detected and sanitized during the load.
+    """
+    import json
+
+    try:
+        batch_uuid = UUID(batch_id)
+    except ValueError:
+        console.print(f"[red]Error: Invalid UUID format: {batch_id}[/red]")
+        raise typer.Exit(1) from None
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_report():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            rows = await conn.fetch(
+                """
+                SELECT event_time, action, details
+                FROM hipaa_audit_log
+                WHERE resource_id = $1
+                  AND action = 'header_sanitization'
+                ORDER BY event_time DESC
+                """,
+                str(batch_uuid),
+            )
+            return [dict(row) for row in rows]
+        finally:
+            await conn.close()
+
+    try:
+        reports = asyncio.run(run_report())
+
+        if not reports:
+            console.print(f"[yellow]No sanitization report found for batch {batch_id}[/yellow]")
+            raise typer.Exit(1)
+
+        if json_output:
+            for report in reports:
+                report["event_time"] = report["event_time"].isoformat()
+            console.print(json.dumps(reports, indent=2))
+        else:
+            for report in reports:
+                details = report.get("details", {})
+                console.print(f"[bold]Sanitization Report[/bold] ({report['event_time']})")
+                console.print(f"  Source: {details.get('source_file', 'N/A')}")
+                console.print(f"  PHI Detected: {details.get('phi_detected', False)}")
+                console.print(f"  Risk Level: {details.get('risk_level', 'N/A')}")
+                console.print(f"  Items Sanitized: {details.get('items_sanitized', 0)}")
+                if details.get("summary"):
+                    console.print("  Summary:")
+                    for pattern, count in details["summary"].items():
+                        console.print(f"    {pattern}: {count}")
+
+    except Exception as e:
+        if not isinstance(e, SystemExit):
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from None
+        raise
 
 
 def main() -> None:

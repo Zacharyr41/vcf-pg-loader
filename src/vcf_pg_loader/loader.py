@@ -14,6 +14,7 @@ import asyncpg
 
 from .audit import AuditEvent, AuditEventType, AuditLogger
 from .models import VariantRecord
+from .phi.header_sanitizer import PHIScanner, SanitizationConfig
 from .schema import SchemaManager
 from .tls import TLSConfig, TLSError, get_ssl_param_for_asyncpg, verify_tls_connection
 from .vcf_parser import VCFStreamingParser
@@ -104,6 +105,10 @@ class LoadConfig:
     tls_config: TLSConfig | None = None
     anonymize: bool = True
     user_id: int | None = None
+    sanitize_headers: bool = True
+    phi_scan: bool = False
+    fail_on_phi: bool = False
+    sanitization_config: SanitizationConfig | None = None
 
 
 class VCFLoader:
@@ -257,12 +262,50 @@ class VCFLoader:
                 )
             )
 
+        if self.config.phi_scan:
+            scanner = PHIScanner(self.config.sanitization_config)
+            scan_result = scanner.scan_vcf_for_phi(vcf_path)
+            if scan_result.has_phi:
+                self.logger.warning(
+                    "PHI detected in VCF header (risk: %s): %d items found",
+                    scan_result.risk_level,
+                    len(scan_result.findings),
+                )
+                if self.config.fail_on_phi:
+                    raise ValueError(
+                        f"PHI detected in VCF file (risk level: {scan_result.risk_level}). "
+                        f"Found {len(scan_result.findings)} potential PHI items. "
+                        "Use --no-fail-on-phi to load anyway."
+                    )
+
         streaming_parser = VCFStreamingParser(
             vcf_path,
             batch_size=self.config.batch_size,
             normalize=self.config.normalize,
             human_genome=self.config.human_genome,
+            sanitize_headers=self.config.sanitize_headers,
+            sanitization_config=self.config.sanitization_config,
         )
+
+        if self.config.sanitize_headers:
+            report = streaming_parser.get_sanitization_report(str(vcf_path))
+            if report and report.phi_detected:
+                self.logger.info(
+                    "Header sanitization: detected %d PHI items (risk: %s)",
+                    report.items_sanitized,
+                    report.risk_level,
+                )
+                if self._audit_logger:
+                    await self._audit_logger.log_event(
+                        AuditEvent(
+                            event_type=AuditEventType.PHI_ACCESS,
+                            action="header_sanitization",
+                            success=True,
+                            resource_type="vcf_file",
+                            resource_id=str(self.load_batch_id),
+                            details=report.to_audit_details(),
+                        )
+                    )
 
         if self.config.anonymize and streaming_parser.samples:
             from .phi import PHIEncryptor, SampleAnonymizer, log_re_identification_warning
