@@ -21,6 +21,19 @@ from .config import load_config
 from .expression import FilterExpressionParser
 from .loader import LoadConfig, VCFLoader
 from .schema import SchemaManager
+from .secrets import (
+    CredentialValidationError,
+    get_database_password,
+    validate_no_password_in_url,
+)
+from .tls import TLSConfig, TLSError, get_ssl_param_for_asyncpg
+
+_default_tls_config: TLSConfig | None = None
+
+
+def _get_ssl_param() -> bool | str:
+    """Get SSL parameter for asyncpg connections using default TLS config."""
+    return get_ssl_param_for_asyncpg(_default_tls_config)
 
 
 def version_callback(value: bool) -> None:
@@ -69,15 +82,47 @@ def _build_database_url(
     port: int | None = None,
     database: str | None = None,
     user: str | None = None,
+    password_env_var: str = "VCF_PG_LOADER_DB_PASSWORD",
 ) -> str | None:
     """Build database URL from individual connection parameters.
 
     Priority (highest to lowest):
-        1. POSTGRES_URL environment variable
-        2. Provided CLI arguments
+        1. POSTGRES_URL environment variable (validated for no embedded password)
+        2. Provided CLI arguments with password from secrets provider
         3. PG* environment variables
+
+    Args:
+        host: PostgreSQL host.
+        port: PostgreSQL port.
+        database: Database name.
+        user: Database user.
+        password_env_var: Environment variable name for password.
+
+    Returns:
+        Database connection URL, or None if insufficient info.
+
+    Raises:
+        CredentialValidationError: If password detected in POSTGRES_URL.
     """
+    logger = logging.getLogger(__name__)
+
     if url := os.environ.get("POSTGRES_URL"):
+        validate_no_password_in_url(url)
+        password = get_database_password(password_env_var=password_env_var)
+        if password:
+            from urllib.parse import urlparse, urlunparse
+
+            parsed = urlparse(url)
+            user_part = parsed.username or "postgres"
+            netloc = f"{user_part}:{password}@{parsed.hostname}"
+            if parsed.port:
+                netloc += f":{parsed.port}"
+            url_with_password = urlunparse(
+                (parsed.scheme, netloc, parsed.path, parsed.params, parsed.query, parsed.fragment)
+            )
+            logger.info("Using POSTGRES_URL with password from %s", password_env_var)
+            return url_with_password
+        logger.info("Using POSTGRES_URL (no password provided)")
         return url
 
     resolved_host = host or os.environ.get("PGHOST")
@@ -87,9 +132,11 @@ def _build_database_url(
     resolved_port = port or int(os.environ.get("PGPORT", "5432"))
     resolved_user = user or os.environ.get("PGUSER", "postgres")
     resolved_database = database or os.environ.get("PGDATABASE", "variants")
-    password = os.environ.get("PGPASSWORD", "")
+
+    password = get_database_password(password_env_var=password_env_var)
 
     if password:
+        logger.info("Database password loaded via secrets provider")
         return f"postgresql://{resolved_user}:{password}@{resolved_host}:{resolved_port}/{resolved_database}"
     return f"postgresql://{resolved_user}@{resolved_host}:{resolved_port}/{resolved_database}"
 
@@ -106,6 +153,7 @@ def _resolve_database_url(
     port: int | None = None,
     database: str | None = None,
     user: str | None = None,
+    password_env_var: str = "VCF_PG_LOADER_DB_PASSWORD",
 ) -> str | None:
     """Resolve database URL, using managed database if needed.
 
@@ -116,17 +164,39 @@ def _resolve_database_url(
         port: PostgreSQL port (CLI arg).
         database: Database name (CLI arg).
         user: Database user (CLI arg).
+        password_env_var: Environment variable name for password.
 
     Returns:
         Resolved database URL, or None if failed.
+
+    Raises:
+        CredentialValidationError: If password detected in provided URL.
     """
+    from urllib.parse import urlparse, urlunparse
+
     from .managed_db import DockerNotAvailableError, ManagedDatabase
     from .schema import SchemaManager
 
+    logger = logging.getLogger(__name__)
+
     if db_url is not None and db_url.lower() != "auto":
+        validate_no_password_in_url(db_url)
+
+        password = get_database_password(password_env_var=password_env_var)
+        if password:
+            parsed = urlparse(db_url)
+            user_part = parsed.username or "postgres"
+            netloc = f"{user_part}:{password}@{parsed.hostname}"
+            if parsed.port:
+                netloc += f":{parsed.port}"
+            url_with_password = urlunparse(
+                (parsed.scheme, netloc, parsed.path, parsed.params, parsed.query, parsed.fragment)
+            )
+            logger.info("Using --db URL with password from %s", password_env_var)
+            return url_with_password
         return db_url
 
-    if built_url := _build_database_url(host, port, database, user):
+    if built_url := _build_database_url(host, port, database, user, password_env_var):
         if not quiet:
             console.print("[dim]Using database from CLI args/environment variables[/dim]")
         return built_url
@@ -151,7 +221,7 @@ def _resolve_database_url(
         async def init_schema():
             import asyncpg
 
-            conn = await asyncpg.connect(url)
+            conn = await asyncpg.connect(url, ssl=_get_ssl_param())
             try:
                 schema_manager = SchemaManager(human_genome=True)
                 await schema_manager.create_schema(conn)
@@ -181,6 +251,13 @@ def load(
     port: Annotated[int | None, typer.Option("--port", help="PostgreSQL port")] = None,
     database: Annotated[str | None, typer.Option("--database", help="Database name")] = None,
     user: Annotated[str | None, typer.Option("--user", help="Database user")] = None,
+    db_password_env: Annotated[
+        str,
+        typer.Option(
+            "--db-password-env",
+            help="Environment variable for database password",
+        ),
+    ] = "VCF_PG_LOADER_DB_PASSWORD",
     schema: Annotated[str, typer.Option("--schema", help="Target schema")] = "public",
     sample_id: Annotated[str | None, typer.Option("--sample-id", help="Sample ID override")] = None,
     batch_size: int = typer.Option(50000, "--batch", "-b", help="Records per batch"),
@@ -205,6 +282,9 @@ def load(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable verbose logging"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
     progress: bool = typer.Option(True, "--progress/--no-progress", help="Show progress bar"),
+    require_tls: bool = typer.Option(
+        True, "--require-tls/--no-require-tls", help="Require TLS for database connections"
+    ),
 ) -> None:
     """Load a VCF file into PostgreSQL.
 
@@ -218,7 +298,13 @@ def load(
         console.print(f"[red]Error: VCF file not found: {vcf_path}[/red]")
         raise typer.Exit(1)
 
-    resolved_db_url = _resolve_database_url(db_url, quiet, host, port, database, user)
+    try:
+        resolved_db_url = _resolve_database_url(
+            db_url, quiet, host, port, database, user, db_password_env
+        )
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
     if resolved_db_url is None:
         raise typer.Exit(1)
 
@@ -233,6 +319,7 @@ def load(
 
     if config_file:
         base_config = load_config(config_file)
+        tls_config = TLSConfig(require_tls=require_tls)
         config = LoadConfig(
             batch_size=batch_size if batch_size != 50000 else base_config.batch_size,
             workers=workers if workers != 8 else base_config.workers,
@@ -240,8 +327,10 @@ def load(
             drop_indexes=drop_indexes,
             human_genome=human_genome,
             log_level="DEBUG" if verbose else ("WARNING" if quiet else base_config.log_level),
+            tls_config=tls_config,
         )
     else:
+        tls_config = TLSConfig(require_tls=require_tls)
         config = LoadConfig(
             batch_size=batch_size,
             workers=workers,
@@ -249,6 +338,7 @@ def load(
             drop_indexes=drop_indexes,
             human_genome=human_genome,
             log_level="DEBUG" if verbose else ("WARNING" if quiet else "INFO"),
+            tls_config=tls_config,
         )
 
     loader = VCFLoader(resolved_db_url, config)
@@ -316,6 +406,10 @@ def load(
             if not quiet:
                 console.print(f"  Report: {report}")
 
+    except TLSError as e:
+        console.print(f"[red]TLS Error: {e}[/red]")
+        console.print("[yellow]Tip:[/yellow] Use --no-require-tls for non-TLS connections")
+        raise typer.Exit(1) from None
     except ConnectionError as e:
         console.print(f"[red]Error: Database connection failed: {e}[/red]")
         raise typer.Exit(1) from None
@@ -339,7 +433,7 @@ def validate(
         raise typer.Exit(1) from None
 
     async def run_validation() -> None:
-        conn = await asyncpg.connect(db_url)
+        conn = await asyncpg.connect(db_url, ssl=_get_ssl_param())
 
         try:
             audit = await conn.fetchrow(
@@ -397,17 +491,31 @@ def init_db(
     human_genome: bool = typer.Option(
         True, "--human-genome/--no-human-genome", help="Use human chromosome enum type"
     ),
+    skip_audit: bool = typer.Option(False, "--skip-audit", help="Skip HIPAA audit schema creation"),
 ) -> None:
-    """Initialize database schema."""
+    """Initialize database schema.
+
+    Creates the complete database schema including:
+    - Variants table (partitioned by chromosome)
+    - Load audit table
+    - Samples table
+    - HIPAA-compliant audit logging (unless --skip-audit)
+    """
 
     async def run_init() -> None:
-        conn = await asyncpg.connect(db_url)
+        conn = await asyncpg.connect(db_url, ssl=_get_ssl_param())
 
         try:
             schema_manager = SchemaManager(human_genome=human_genome)
             await schema_manager.create_schema(conn)
             await schema_manager.create_indexes(conn)
             console.print("[green]✓[/green] Database schema initialized")
+
+            if not skip_audit:
+                partitions = await schema_manager.get_audit_partition_info(conn)
+                console.print(
+                    f"[green]✓[/green] HIPAA audit schema created ({len(partitions)} partitions)"
+                )
 
         finally:
             await conn.close()
@@ -560,7 +668,11 @@ def load_annotation(
         console.print(f"[red]Error: Config file not found: {config_file}[/red]")
         raise typer.Exit(1)
 
-    resolved_db_url = _resolve_database_url(db_url, quiet)
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
     if resolved_db_url is None:
         raise typer.Exit(1)
 
@@ -571,7 +683,7 @@ def load_annotation(
         raise typer.Exit(1) from None
 
     async def run_load() -> dict:
-        conn = await asyncpg.connect(resolved_db_url)
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
         try:
             schema_manager = SchemaManager(human_genome=human_genome)
             await schema_manager.create_schema(conn)
@@ -609,12 +721,16 @@ def list_annotations(
     """List all loaded annotation sources."""
     import json
 
-    resolved_db_url = _resolve_database_url(db_url, quiet)
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
     if resolved_db_url is None:
         raise typer.Exit(1)
 
     async def run_list() -> list:
-        conn = await asyncpg.connect(resolved_db_url)
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
         try:
             schema_manager = AnnotationSchemaManager()
 
@@ -685,12 +801,16 @@ def annotate(
             console.print(f"[red]Error in filter expression: {'; '.join(syntax_errors)}[/red]")
             raise typer.Exit(1)
 
-    resolved_db_url = _resolve_database_url(db_url, quiet)
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
     if resolved_db_url is None:
         raise typer.Exit(1)
 
     async def run_annotate() -> list:
-        conn = await asyncpg.connect(resolved_db_url)
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
         try:
             annotator = VariantAnnotator(conn)
             results = await annotator.annotate_variants(
@@ -750,12 +870,16 @@ def annotation_query(
     import json
     import sys
 
-    resolved_db_url = _resolve_database_url(db_url, quiet)
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
     if resolved_db_url is None:
         raise typer.Exit(1)
 
     async def run_query() -> list:
-        conn = await asyncpg.connect(resolved_db_url)
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
         try:
             rows = await conn.fetch(sql)
             return [dict(row) for row in rows]

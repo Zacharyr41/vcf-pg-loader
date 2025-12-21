@@ -1,12 +1,35 @@
 """PostgreSQL schema management for VCF data."""
 
-
 import asyncpg
 
+from .audit.schema import AuditSchemaManager
+
 HUMAN_CHROMOSOMES = [
-    'chr1', 'chr2', 'chr3', 'chr4', 'chr5', 'chr6', 'chr7', 'chr8', 'chr9',
-    'chr10', 'chr11', 'chr12', 'chr13', 'chr14', 'chr15', 'chr16', 'chr17',
-    'chr18', 'chr19', 'chr20', 'chr21', 'chr22', 'chrX', 'chrY', 'chrM'
+    "chr1",
+    "chr2",
+    "chr3",
+    "chr4",
+    "chr5",
+    "chr6",
+    "chr7",
+    "chr8",
+    "chr9",
+    "chr10",
+    "chr11",
+    "chr12",
+    "chr13",
+    "chr14",
+    "chr15",
+    "chr16",
+    "chr17",
+    "chr18",
+    "chr19",
+    "chr20",
+    "chr21",
+    "chr22",
+    "chrX",
+    "chrY",
+    "chrM",
 ]
 
 
@@ -15,6 +38,7 @@ class SchemaManager:
 
     def __init__(self, human_genome: bool = True):
         self.human_genome = human_genome
+        self._audit_manager = AuditSchemaManager()
 
     async def create_schema(self, conn: asyncpg.Connection) -> None:
         """Create complete database schema."""
@@ -24,6 +48,7 @@ class SchemaManager:
         await self.create_variants_table(conn)
         await self.create_audit_table(conn)
         await self.create_samples_table(conn)
+        await self.create_hipaa_audit_schema(conn)
 
     async def drop_schema(self, conn: asyncpg.Connection) -> None:
         """Drop existing schema tables for clean recreation."""
@@ -257,6 +282,28 @@ class SchemaManager:
 
     async def vacuum_analyze(self, conn: asyncpg.Connection) -> None:
         """Run VACUUM ANALYZE for query planner statistics."""
-        await conn.execute('VACUUM ANALYZE variants')
-        await conn.execute('VACUUM ANALYZE variant_load_audit')
-        await conn.execute('VACUUM ANALYZE samples')
+        await conn.execute("VACUUM ANALYZE variants")
+        await conn.execute("VACUUM ANALYZE variant_load_audit")
+        await conn.execute("VACUUM ANALYZE samples")
+
+    async def create_hipaa_audit_schema(self, conn: asyncpg.Connection) -> list[str]:
+        """Create HIPAA-compliant audit logging schema.
+
+        Creates the hipaa_audit_log partitioned table with:
+        - Immutability triggers (prevents UPDATE/DELETE)
+        - Monthly partitions for retention management
+        - Compliance query views
+
+        Returns:
+            List of created partition names
+        """
+        await self._audit_manager.create_audit_schema(conn)
+        return await self._audit_manager.create_initial_partitions(conn)
+
+    async def get_audit_partition_info(self, conn: asyncpg.Connection) -> list[dict]:
+        """Get information about HIPAA audit log partitions."""
+        return await self._audit_manager.get_partition_info(conn)
+
+    async def verify_audit_immutability(self, conn: asyncpg.Connection) -> bool:
+        """Verify HIPAA audit log immutability triggers are active."""
+        return await self._audit_manager.verify_immutability(conn)

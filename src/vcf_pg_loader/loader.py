@@ -7,14 +7,19 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Literal, NotRequired, TypedDict, TypeGuard
+from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict, TypeGuard
 from uuid import UUID, uuid4
 
 import asyncpg
 
+from .audit import AuditEvent, AuditEventType, AuditLogger
 from .models import VariantRecord
 from .schema import SchemaManager
+from .tls import TLSConfig, TLSError, get_ssl_param_for_asyncpg, verify_tls_connection
 from .vcf_parser import VCFStreamingParser
+
+if TYPE_CHECKING:
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +101,7 @@ class LoadConfig:
     human_genome: bool = True
     log_level: str = "INFO"
     progress_callback: ProgressCallback | None = None
+    tls_config: TLSConfig | None = None
 
 
 class VCFLoader:
@@ -105,7 +111,8 @@ class VCFLoader:
         self,
         db_url: str,
         config: LoadConfig | None = None,
-        logger: logging.Logger | None = None
+        logger: logging.Logger | None = None,
+        audit_logger: AuditLogger | None = None,
     ):
         self.db_url = db_url
         self.config = config or LoadConfig()
@@ -113,16 +120,32 @@ class VCFLoader:
         self.load_batch_id: UUID = uuid4()
         self._schema_manager = SchemaManager(human_genome=self.config.human_genome)
         self.logger = logger or logging.getLogger(__name__)
+        self._audit_logger = audit_logger
 
     async def connect(self) -> None:
-        """Establish database connection pool."""
+        """Establish database connection pool with TLS."""
         self.logger.debug("Establishing database connection pool")
+
+        tls_config = self.config.tls_config or TLSConfig.from_env()
+        ssl_param = get_ssl_param_for_asyncpg(tls_config)
+
         self.pool = await asyncpg.create_pool(
             self.db_url,
             min_size=4,
             max_size=self.config.workers * 2,
-            command_timeout=300
+            command_timeout=300,
+            ssl=ssl_param,
         )
+
+        if tls_config.require_tls:
+            async with self.pool.acquire() as conn:
+                try:
+                    await verify_tls_connection(conn)
+                    self.logger.info("TLS connection established successfully")
+                except TLSError as e:
+                    await self.pool.close()
+                    self.pool = None
+                    raise TLSError(f"TLS required but connection is not encrypted: {e}") from e
 
     async def close(self) -> None:
         """Close database connection pool."""
@@ -155,7 +178,7 @@ class VCFLoader:
                 ORDER BY load_completed_at DESC
                 LIMIT 1
                 """,
-                file_hash
+                file_hash,
             )
 
         if row:
@@ -163,7 +186,7 @@ class VCFLoader:
                 "load_batch_id": row["load_batch_id"],
                 "status": row["status"],
                 "variants_loaded": row["variants_loaded"],
-                "load_completed_at": row["load_completed_at"]
+                "load_completed_at": row["load_completed_at"],
             }
         return None
 
@@ -181,6 +204,10 @@ class VCFLoader:
                 self.logger.error("Failed to connect to database: %s", e)
                 raise
 
+        if self._audit_logger:
+            self._audit_logger.set_pool(self.pool)
+            await self._audit_logger.start()
+
         file_hash = compute_file_hash(vcf_path)
 
         existing = await self.check_existing(vcf_path)
@@ -189,7 +216,7 @@ class VCFLoader:
                 "skipped": True,
                 "reason": "already_loaded",
                 "previous_load_id": str(existing["load_batch_id"]),
-                "file_hash": file_hash
+                "file_hash": file_hash,
             }
 
         is_reload = existing is not None
@@ -202,17 +229,35 @@ class VCFLoader:
                 )
             async with self.pool.acquire() as conn:
                 await conn.execute(
-                    "DELETE FROM variants WHERE load_batch_id = $1",
-                    previous_load_id
+                    "DELETE FROM variants WHERE load_batch_id = $1", previous_load_id
                 )
 
         self.load_batch_id = uuid4()
+
+        if self._audit_logger:
+            await self._audit_logger.log_event(
+                AuditEvent(
+                    event_type=AuditEventType.DATA_WRITE,
+                    action="vcf_load_started",
+                    success=True,
+                    resource_type="vcf_file",
+                    resource_id=str(self.load_batch_id),
+                    details={
+                        "file_name": vcf_path.name,
+                        "file_hash": file_hash,
+                        "file_size_bytes": vcf_path.stat().st_size,
+                        "force_reload": force_reload,
+                        "is_reload": is_reload,
+                        "parallel": parallel,
+                    },
+                )
+            )
 
         streaming_parser = VCFStreamingParser(
             vcf_path,
             batch_size=self.config.batch_size,
             normalize=self.config.normalize,
-            human_genome=self.config.human_genome
+            human_genome=self.config.human_genome,
         )
 
         try:
@@ -221,8 +266,11 @@ class VCFLoader:
                     await self._schema_manager.drop_indexes(conn)
 
             await self._start_audit(
-                vcf_path, file_hash, len(streaming_parser.samples),
-                is_reload=is_reload, previous_load_id=previous_load_id
+                vcf_path,
+                file_hash,
+                len(streaming_parser.samples),
+                is_reload=is_reload,
+                previous_load_id=previous_load_id,
             )
 
             total_loaded = 0
@@ -236,7 +284,9 @@ class VCFLoader:
                     batch_num += 1
                     self.logger.debug(
                         "Batch %d: loaded %d variants (total: %d)",
-                        batch_num, len(batch), total_loaded
+                        batch_num,
+                        len(batch),
+                        total_loaded,
                     )
                     if self.config.progress_callback is not None:
                         self.config.progress_callback(batch_num, len(batch), total_loaded)
@@ -247,14 +297,30 @@ class VCFLoader:
 
             await self._complete_audit(total_loaded)
             self.logger.info(
-                "Completed load: %d variants loaded (batch_id=%s)",
-                total_loaded, self.load_batch_id
+                "Completed load: %d variants loaded (batch_id=%s)", total_loaded, self.load_batch_id
             )
+
+            if self._audit_logger:
+                await self._audit_logger.log_event(
+                    AuditEvent(
+                        event_type=AuditEventType.DATA_WRITE,
+                        action="vcf_load_completed",
+                        success=True,
+                        resource_type="vcf_file",
+                        resource_id=str(self.load_batch_id),
+                        details={
+                            "file_name": vcf_path.name,
+                            "variants_loaded": total_loaded,
+                            "parallel": parallel,
+                        },
+                    )
+                )
+                await self._audit_logger.flush()
 
             result = {
                 "variants_loaded": total_loaded,
                 "load_batch_id": str(self.load_batch_id),
-                "file_hash": file_hash
+                "file_hash": file_hash,
             }
             if parallel:
                 result["parallel"] = True
@@ -263,6 +329,24 @@ class VCFLoader:
                 result["previous_load_id"] = str(previous_load_id)
 
             return result
+
+        except Exception as e:
+            if self._audit_logger:
+                await self._audit_logger.log_event(
+                    AuditEvent(
+                        event_type=AuditEventType.DATA_WRITE,
+                        action="vcf_load_failed",
+                        success=False,
+                        resource_type="vcf_file",
+                        resource_id=str(self.load_batch_id),
+                        error_message=str(e)[:1000],
+                        details={
+                            "file_name": vcf_path.name,
+                        },
+                    )
+                )
+                await self._audit_logger.flush()
+            raise
 
         finally:
             streaming_parser.close()
@@ -278,14 +362,16 @@ class VCFLoader:
 
         async with self.pool.acquire() as conn:
             await conn.copy_records_to_table(
-                "variants",
-                records=records,
-                columns=VARIANT_COLUMNS_BASIC
+                "variants", records=records, columns=VARIANT_COLUMNS_BASIC
             )
 
     async def _start_audit(
-        self, vcf_path: Path, file_hash: str, samples_count: int,
-        is_reload: bool = False, previous_load_id: UUID | None = None
+        self,
+        vcf_path: Path,
+        file_hash: str,
+        samples_count: int,
+        is_reload: bool = False,
+        previous_load_id: UUID | None = None,
     ) -> None:
         """Create audit record for this load."""
         async with self.pool.acquire() as conn:
@@ -305,7 +391,7 @@ class VCFLoader:
                 samples_count,
                 "started",
                 is_reload,
-                previous_load_id
+                previous_load_id,
             )
 
     async def _complete_audit(self, variants_loaded: int) -> None:
@@ -320,7 +406,7 @@ class VCFLoader:
                 WHERE load_batch_id = $1
                 """,
                 self.load_batch_id,
-                variants_loaded
+                variants_loaded,
             )
 
     async def _fail_audit(self, error_message: str) -> None:
@@ -335,16 +421,13 @@ class VCFLoader:
                 WHERE load_batch_id = $1
                 """,
                 self.load_batch_id,
-                error_message
+                error_message,
             )
 
     async def _rollback_variants(self) -> None:
         """Rollback any variants loaded for current batch."""
         async with self.pool.acquire() as conn:
-            await conn.execute(
-                "DELETE FROM variants WHERE load_batch_id = $1",
-                self.load_batch_id
-            )
+            await conn.execute("DELETE FROM variants WHERE load_batch_id = $1", self.load_batch_id)
 
     async def _load_parallel(self, streaming_parser: VCFStreamingParser) -> int:
         """Load variants in parallel by chromosome.
@@ -371,20 +454,19 @@ class VCFLoader:
         async def load_chromosome(chrom: str, records: list[VariantRecord]) -> int:
             batch_size = self.config.batch_size
             for i in range(0, len(records), batch_size):
-                await self.copy_batch(records[i:i + batch_size])
+                await self.copy_batch(records[i : i + batch_size])
             return len(records)
 
-        tasks = [
-            load_chromosome(chrom, records)
-            for chrom, records in chrom_batches.items()
-        ]
+        tasks = [load_chromosome(chrom, records) for chrom, records in chrom_batches.items()]
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         errors = [r for r in results if isinstance(r, Exception)]
         if errors:
             await self._rollback_variants()
-            error_msg = f"Parallel loading failed: {len(errors)} worker(s) failed. First error: {errors[0]}"
+            error_msg = (
+                f"Parallel loading failed: {len(errors)} worker(s) failed. First error: {errors[0]}"
+            )
             await self._fail_audit(error_msg)
             raise RuntimeError(error_msg) from errors[0]
 

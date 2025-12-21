@@ -1,9 +1,12 @@
 """System dependency checker for vcf-pg-loader."""
 
 import importlib
+import os
 import platform
+import ssl
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 import docker
 import docker.errors
@@ -117,6 +120,65 @@ class DependencyChecker:
                 message="asyncpg not installed",
             )
 
+    def check_tls_support(self) -> CheckResult:
+        """Check TLS/SSL support for secure database connections."""
+        try:
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+
+            has_tls13 = hasattr(ssl.TLSVersion, "TLSv1_3")
+            version = f"TLS 1.2+{' (TLS 1.3 available)' if has_tls13 else ''}"
+
+            return CheckResult(
+                name="TLS Support",
+                passed=True,
+                version=version,
+            )
+        except Exception as e:
+            return CheckResult(
+                name="TLS Support",
+                passed=False,
+                message=f"TLS not available: {e}",
+            )
+
+    def check_tls_certificates(self) -> CheckResult:
+        """Check if TLS certificates are configured."""
+        ca_cert = os.environ.get("VCF_PG_LOADER_TLS_CA_CERT")
+        client_cert = os.environ.get("VCF_PG_LOADER_TLS_CLIENT_CERT")
+        client_key = os.environ.get("VCF_PG_LOADER_TLS_CLIENT_KEY")
+
+        issues = []
+
+        if ca_cert:
+            if not Path(ca_cert).exists():
+                issues.append(f"CA cert not found: {ca_cert}")
+        if client_cert:
+            if not Path(client_cert).exists():
+                issues.append(f"Client cert not found: {client_cert}")
+        if client_key:
+            if not Path(client_key).exists():
+                issues.append(f"Client key not found: {client_key}")
+
+        if issues:
+            return CheckResult(
+                name="TLS Certificates",
+                passed=False,
+                message="; ".join(issues),
+            )
+
+        if ca_cert or client_cert:
+            return CheckResult(
+                name="TLS Certificates",
+                passed=True,
+                version="configured",
+            )
+
+        return CheckResult(
+            name="TLS Certificates",
+            passed=True,
+            version="using system defaults",
+        )
+
     def check_all(self) -> list[CheckResult]:
         """Run all dependency checks.
 
@@ -127,6 +189,8 @@ class DependencyChecker:
             self.check_python(),
             self.check_cyvcf2(),
             self.check_asyncpg(),
+            self.check_tls_support(),
+            self.check_tls_certificates(),
             self.check_docker(),
             self.check_docker_daemon(),
         ]
