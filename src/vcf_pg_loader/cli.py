@@ -2023,6 +2023,413 @@ def auth_unlock_user(
         raise
 
 
+roles_app = typer.Typer(help="Role-Based Access Control (HIPAA 164.312(a)(1))")
+app.add_typer(roles_app, name="roles")
+
+
+@roles_app.command("list")
+def roles_list(
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """List all available roles."""
+    import json
+
+    from .auth.roles import RoleManager
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_list():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            manager = RoleManager()
+            roles = await manager.list_roles(conn)
+            return roles
+        finally:
+            await conn.close()
+
+    try:
+        roles = asyncio.run(run_list())
+
+        if json_output:
+            output = []
+            for r in roles:
+                output.append(
+                    {
+                        "role_id": r.role_id,
+                        "role_name": r.role_name,
+                        "description": r.description,
+                        "is_system_role": r.is_system_role,
+                    }
+                )
+            console.print(json.dumps(output, indent=2))
+        elif roles:
+            for r in roles:
+                system_tag = " [dim](system)[/dim]" if r.is_system_role else ""
+                console.print(f"[cyan]{r.role_name}[/cyan]{system_tag}")
+                if r.description:
+                    console.print(f"  {r.description}")
+        else:
+            if not quiet:
+                console.print("[dim]No roles defined[/dim]")
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@roles_app.command("assign")
+def roles_assign(
+    username: Annotated[str, typer.Option("--user", "-u", help="Username")],
+    role: Annotated[str, typer.Option("--role", "-r", help="Role name")],
+    expires: Annotated[
+        str | None, typer.Option("--expires", help="Expiry date (YYYY-MM-DD)")
+    ] = None,
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Assign a role to a user."""
+    from datetime import datetime
+
+    from .auth import Authenticator, AuthSchemaManager, SessionStorage, UserManager
+    from .auth.roles import RoleManager
+
+    storage = SessionStorage()
+    token, _ = storage.load_token()
+
+    if not token:
+        console.print("[red]Not logged in. Use 'vcf-pg-loader auth login' first.[/red]")
+        raise typer.Exit(1)
+
+    expires_at = None
+    if expires:
+        try:
+            expires_at = datetime.fromisoformat(expires)
+        except ValueError:
+            console.print("[red]Invalid date format. Use YYYY-MM-DD[/red]")
+            raise typer.Exit(1) from None
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_assign():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            schema_manager = AuthSchemaManager()
+            if not await schema_manager.schema_exists(conn):
+                await schema_manager.create_auth_schema(conn)
+
+            auth = Authenticator(jwt_secret=_get_jwt_secret())
+            session = await auth.validate_session(conn, token)
+            if not session:
+                return False, "Session expired"
+
+            user_manager = UserManager()
+            target_user = await user_manager.get_user_by_username(conn, username)
+            if not target_user:
+                return False, f"User '{username}' not found"
+
+            role_manager = RoleManager()
+            success, message = await role_manager.assign_role(
+                conn, target_user.user_id, role, session.user_id, expires_at
+            )
+            return success, message
+        finally:
+            await conn.close()
+
+    try:
+        success, message = asyncio.run(run_assign())
+        if success:
+            if not quiet:
+                console.print(f"[green]✓[/green] {message}")
+        else:
+            console.print(f"[red]Failed: {message}[/red]")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        if not isinstance(e, SystemExit):
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from None
+        raise
+
+
+@roles_app.command("revoke")
+def roles_revoke(
+    username: Annotated[str, typer.Option("--user", "-u", help="Username")],
+    role: Annotated[str, typer.Option("--role", "-r", help="Role name")],
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Revoke a role from a user."""
+    from .auth import Authenticator, AuthSchemaManager, SessionStorage, UserManager
+    from .auth.roles import RoleManager
+
+    storage = SessionStorage()
+    token, _ = storage.load_token()
+
+    if not token:
+        console.print("[red]Not logged in. Use 'vcf-pg-loader auth login' first.[/red]")
+        raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_revoke():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            schema_manager = AuthSchemaManager()
+            if not await schema_manager.schema_exists(conn):
+                return False, "Auth schema not initialized"
+
+            auth = Authenticator(jwt_secret=_get_jwt_secret())
+            session = await auth.validate_session(conn, token)
+            if not session:
+                return False, "Session expired"
+
+            user_manager = UserManager()
+            target_user = await user_manager.get_user_by_username(conn, username)
+            if not target_user:
+                return False, f"User '{username}' not found"
+
+            role_manager = RoleManager()
+            success, message = await role_manager.revoke_role(
+                conn, target_user.user_id, role, session.user_id
+            )
+            return success, message
+        finally:
+            await conn.close()
+
+    try:
+        success, message = asyncio.run(run_revoke())
+        if success:
+            if not quiet:
+                console.print(f"[green]✓[/green] {message}")
+        else:
+            console.print(f"[red]Failed: {message}[/red]")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        if not isinstance(e, SystemExit):
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from None
+        raise
+
+
+@roles_app.command("show")
+def roles_show(
+    username: Annotated[str, typer.Option("--user", "-u", help="Username")],
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Show roles assigned to a user."""
+    import json
+
+    from .auth import AuthSchemaManager, UserManager
+    from .auth.roles import RoleManager
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_show():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            schema_manager = AuthSchemaManager()
+            if not await schema_manager.schema_exists(conn):
+                return None, []
+
+            user_manager = UserManager()
+            target_user = await user_manager.get_user_by_username(conn, username)
+            if not target_user:
+                return None, []
+
+            role_manager = RoleManager()
+            roles = await role_manager.get_user_roles(conn, target_user.user_id)
+            return target_user, roles
+        finally:
+            await conn.close()
+
+    try:
+        user, roles = asyncio.run(run_show())
+
+        if user is None:
+            console.print(f"[red]User '{username}' not found[/red]")
+            raise typer.Exit(1)
+
+        if json_output:
+            output = []
+            for r in roles:
+                output.append(
+                    {
+                        "role_name": r.role_name,
+                        "granted_at": r.granted_at.isoformat() if r.granted_at else None,
+                        "expires_at": r.expires_at.isoformat() if r.expires_at else None,
+                    }
+                )
+            console.print(json.dumps(output, indent=2))
+        elif roles:
+            console.print(f"[bold]Roles for {username}:[/bold]")
+            for r in roles:
+                expires_str = ""
+                if r.expires_at:
+                    expires_str = f" [dim](expires {r.expires_at.isoformat()})[/dim]"
+                console.print(f"  [cyan]{r.role_name}[/cyan]{expires_str}")
+        else:
+            if not quiet:
+                console.print(f"[dim]No roles assigned to {username}[/dim]")
+
+    except Exception as e:
+        if not isinstance(e, SystemExit):
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from None
+        raise
+
+
+permissions_app = typer.Typer(help="Permission management (HIPAA 164.312(a)(1))")
+app.add_typer(permissions_app, name="permissions")
+
+
+@permissions_app.command("list")
+def permissions_list(
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """List all available permissions."""
+    import json
+
+    from .auth.permissions import PermissionChecker
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_list():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            checker = PermissionChecker()
+            permissions = await checker.list_permissions(conn)
+            return permissions
+        finally:
+            await conn.close()
+
+    try:
+        permissions = asyncio.run(run_list())
+
+        if json_output:
+            output = []
+            for p in permissions:
+                output.append(
+                    {
+                        "permission_name": p.permission_name,
+                        "resource_type": p.resource_type,
+                        "action": p.action,
+                        "description": p.description,
+                    }
+                )
+            console.print(json.dumps(output, indent=2))
+        elif permissions:
+            current_resource = None
+            for p in permissions:
+                if p.resource_type != current_resource:
+                    if current_resource is not None:
+                        console.print()
+                    console.print(f"[bold]{p.resource_type}:[/bold]")
+                    current_resource = p.resource_type
+                desc = f" - {p.description}" if p.description else ""
+                console.print(f"  [cyan]{p.permission_name}[/cyan]{desc}")
+        else:
+            if not quiet:
+                console.print("[dim]No permissions defined[/dim]")
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@permissions_app.command("check")
+def permissions_check(
+    username: Annotated[str, typer.Option("--user", "-u", help="Username")],
+    permission: Annotated[str, typer.Option("--permission", "-p", help="Permission name")],
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Check if a user has a specific permission."""
+    from .auth import AuthSchemaManager, UserManager
+    from .auth.permissions import PermissionChecker
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_check():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            schema_manager = AuthSchemaManager()
+            if not await schema_manager.schema_exists(conn):
+                return None, False
+
+            user_manager = UserManager()
+            target_user = await user_manager.get_user_by_username(conn, username)
+            if not target_user:
+                return None, False
+
+            checker = PermissionChecker()
+            has_perm = await checker.has_permission(conn, target_user.user_id, permission)
+            return target_user, has_perm
+        finally:
+            await conn.close()
+
+    try:
+        user, has_perm = asyncio.run(run_check())
+
+        if user is None:
+            console.print(f"[red]User '{username}' not found[/red]")
+            raise typer.Exit(1)
+
+        if has_perm:
+            console.print(f"[green]✓[/green] {username} has permission '{permission}'")
+        else:
+            console.print(f"[red]✗[/red] {username} does NOT have permission '{permission}'")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        if not isinstance(e, SystemExit):
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from None
+        raise
+
+
 def main() -> None:
     """Entry point for the CLI."""
     app()
