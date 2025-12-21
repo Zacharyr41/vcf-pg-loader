@@ -9,10 +9,24 @@ secure linkage capability for authorized users.
 
 from .anonymizer import SampleAnonymizer
 from .encryption import PHIEncryptor
+from .header_sanitizer import (
+    PHIScanner,
+    PHIScanResult,
+    SanitizationConfig,
+    SanitizationReport,
+    SanitizedHeader,
+    VCFHeaderSanitizer,
+)
 from .schema import PHISchemaManager
 
 __all__ = [
     "SampleAnonymizer",
     "PHIEncryptor",
     "PHISchemaManager",
+    "PHIScanner",
+    "PHIScanResult",
+    "SanitizationConfig",
+    "SanitizationReport",
+    "SanitizedHeader",
+    "VCFHeaderSanitizer",
 ]
