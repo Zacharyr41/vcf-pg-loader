@@ -55,6 +55,7 @@ VARIANT_COLUMNS_BASIC: list[str] = [
     "cadd_phred",
     "clinvar_sig",
     "load_batch_id",
+    "sample_id",
 ]
 
 
@@ -82,6 +83,7 @@ def get_record_values(record: VariantRecord, load_batch_id: UUID) -> tuple:
         record.cadd_phred,
         record.clinvar_sig,
         load_batch_id,
+        record.sample_id,
     )
 
 

@@ -102,6 +102,8 @@ class LoadConfig:
     log_level: str = "INFO"
     progress_callback: ProgressCallback | None = None
     tls_config: TLSConfig | None = None
+    anonymize: bool = True
+    user_id: int | None = None
 
 
 class VCFLoader:
@@ -121,6 +123,8 @@ class VCFLoader:
         self._schema_manager = SchemaManager(human_genome=self.config.human_genome)
         self.logger = logger or logging.getLogger(__name__)
         self._audit_logger = audit_logger
+        self._anonymizer = None
+        self._sample_mappings: dict[str, UUID] = {}
 
     async def connect(self) -> None:
         """Establish database connection pool with TLS."""
@@ -260,6 +264,28 @@ class VCFLoader:
             human_genome=self.config.human_genome,
         )
 
+        if self.config.anonymize and streaming_parser.samples:
+            from .phi import PHIEncryptor, SampleAnonymizer, log_re_identification_warning
+
+            log_re_identification_warning()
+
+            encryptor = PHIEncryptor()
+            self._anonymizer = SampleAnonymizer(
+                pool=self.pool,
+                encryptor=encryptor if encryptor.is_available else None,
+                created_by=self.config.user_id,
+            )
+            self._sample_mappings = await self._anonymizer.bulk_anonymize(
+                streaming_parser.samples,
+                str(vcf_path),
+                self.load_batch_id,
+            )
+            self.logger.info(
+                "Anonymized %d sample IDs (encryption: %s)",
+                len(self._sample_mappings),
+                "enabled" if encryptor.is_available else "disabled",
+            )
+
         try:
             if self.config.drop_indexes:
                 async with self.pool.acquire() as conn:
@@ -273,13 +299,17 @@ class VCFLoader:
                 previous_load_id=previous_load_id,
             )
 
+            anon_sample_id = None
+            if self._sample_mappings and len(self._sample_mappings) == 1:
+                anon_sample_id = str(list(self._sample_mappings.values())[0])
+
             total_loaded = 0
             if parallel and self.config.workers > 1:
-                total_loaded = await self._load_parallel(streaming_parser)
+                total_loaded = await self._load_parallel(streaming_parser, anon_sample_id)
             else:
                 batch_num = 0
                 for batch in streaming_parser.iter_batches():
-                    await self.copy_batch(batch)
+                    await self.copy_batch(batch, sample_id=anon_sample_id)
                     total_loaded += len(batch)
                     batch_num += 1
                     self.logger.debug(
@@ -351,12 +381,21 @@ class VCFLoader:
         finally:
             streaming_parser.close()
 
-    async def copy_batch(self, batch: list[VariantRecord]) -> None:
-        """Copy a batch of records using binary COPY protocol."""
+    async def copy_batch(self, batch: list[VariantRecord], sample_id: str | None = None) -> None:
+        """Copy a batch of records using binary COPY protocol.
+
+        Args:
+            batch: List of VariantRecord objects to insert
+            sample_id: Optional sample ID to apply to all records (used for anonymization)
+        """
         if not batch:
             return
 
         from .columns import VARIANT_COLUMNS_BASIC, get_record_values
+
+        if sample_id is not None:
+            for record in batch:
+                record.sample_id = sample_id
 
         records = [get_record_values(r, self.load_batch_id) for r in batch]
 
@@ -429,7 +468,9 @@ class VCFLoader:
         async with self.pool.acquire() as conn:
             await conn.execute("DELETE FROM variants WHERE load_batch_id = $1", self.load_batch_id)
 
-    async def _load_parallel(self, streaming_parser: VCFStreamingParser) -> int:
+    async def _load_parallel(
+        self, streaming_parser: VCFStreamingParser, sample_id: str | None = None
+    ) -> int:
         """Load variants in parallel by chromosome.
 
         Handles worker failures by rolling back partial loads and marking
@@ -454,7 +495,7 @@ class VCFLoader:
         async def load_chromosome(chrom: str, records: list[VariantRecord]) -> int:
             batch_size = self.config.batch_size
             for i in range(0, len(records), batch_size):
-                await self.copy_batch(records[i : i + batch_size])
+                await self.copy_batch(records[i : i + batch_size], sample_id=sample_id)
             return len(records)
 
         tasks = [load_chromosome(chrom, records) for chrom, records in chrom_batches.items()]

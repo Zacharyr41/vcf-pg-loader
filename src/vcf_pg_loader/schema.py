@@ -3,6 +3,7 @@
 import asyncpg
 
 from .audit.schema import AuditSchemaManager
+from .phi.schema import PHISchemaManager
 
 HUMAN_CHROMOSOMES = [
     "chr1",
@@ -39,6 +40,7 @@ class SchemaManager:
     def __init__(self, human_genome: bool = True):
         self.human_genome = human_genome
         self._audit_manager = AuditSchemaManager()
+        self._phi_manager = PHISchemaManager()
 
     async def create_schema(self, conn: asyncpg.Connection) -> None:
         """Create complete database schema."""
@@ -49,6 +51,7 @@ class SchemaManager:
         await self.create_audit_table(conn)
         await self.create_samples_table(conn)
         await self.create_hipaa_audit_schema(conn)
+        await self.create_phi_vault_schema(conn)
 
     async def drop_schema(self, conn: asyncpg.Connection) -> None:
         """Drop existing schema tables for clean recreation."""
@@ -307,3 +310,22 @@ class SchemaManager:
     async def verify_audit_immutability(self, conn: asyncpg.Connection) -> bool:
         """Verify HIPAA audit log immutability triggers are active."""
         return await self._audit_manager.verify_immutability(conn)
+
+    async def create_phi_vault_schema(self, conn: asyncpg.Connection) -> None:
+        """Create PHI vault schema for sample ID anonymization.
+
+        Creates the phi_vault schema with:
+        - sample_id_mapping table for original->anonymous mappings
+        - reverse_lookup_audit table for compliance tracking
+        - Immutability triggers on mappings
+        - Restricted access roles (phi_admin, phi_viewer)
+        """
+        await self._phi_manager.create_phi_schema(conn)
+
+    async def verify_phi_schema(self, conn: asyncpg.Connection) -> bool:
+        """Verify PHI vault schema exists and is properly configured."""
+        return await self._phi_manager.verify_schema_exists(conn)
+
+    async def get_phi_stats(self, conn: asyncpg.Connection) -> dict:
+        """Get PHI vault statistics."""
+        return await self._phi_manager.get_mapping_stats(conn)
