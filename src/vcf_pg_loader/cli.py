@@ -286,6 +286,9 @@ def load(
     require_tls: bool = typer.Option(
         True, "--require-tls/--no-require-tls", help="Require TLS for database connections"
     ),
+    anonymize: bool = typer.Option(
+        True, "--anonymize/--no-anonymize", help="Anonymize sample IDs for HIPAA compliance"
+    ),
 ) -> None:
     """Load a VCF file into PostgreSQL.
 
@@ -329,6 +332,7 @@ def load(
             human_genome=human_genome,
             log_level="DEBUG" if verbose else ("WARNING" if quiet else base_config.log_level),
             tls_config=tls_config,
+            anonymize=anonymize,
         )
     else:
         tls_config = TLSConfig(require_tls=require_tls)
@@ -340,6 +344,7 @@ def load(
             human_genome=human_genome,
             log_level="DEBUG" if verbose else ("WARNING" if quiet else "INFO"),
             tls_config=tls_config,
+            anonymize=anonymize,
         )
 
     loader = VCFLoader(resolved_db_url, config)
@@ -2814,6 +2819,245 @@ def permissions_check(
             console.print(f"[red]Error: {e}[/red]")
             raise typer.Exit(1) from None
         raise
+
+
+phi_app = typer.Typer(help="PHI anonymization management (HIPAA 164.514(b))")
+app.add_typer(phi_app, name="phi")
+
+
+@phi_app.command("lookup")
+def phi_lookup(
+    anonymous_id: Annotated[str, typer.Argument(..., help="Anonymous UUID to look up")],
+    reason: Annotated[str | None, typer.Option("--reason", "-r", help="Reason for lookup")] = None,
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Reverse lookup: get original sample ID from anonymous UUID.
+
+    This operation is audited. All lookups are logged to phi_vault.reverse_lookup_audit.
+    Requires phi:lookup permission.
+    """
+    from .phi import SampleAnonymizer
+
+    try:
+        lookup_uuid = UUID(anonymous_id)
+    except ValueError:
+        console.print(f"[red]Error: Invalid UUID format: {anonymous_id}[/red]")
+        raise typer.Exit(1) from None
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_lookup():
+        pool = await asyncpg.create_pool(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            anonymizer = SampleAnonymizer(pool=pool)
+            original_id = await anonymizer.reverse_lookup(
+                lookup_uuid,
+                requester_id=1,
+                reason=reason,
+            )
+            return original_id
+        finally:
+            await pool.close()
+
+    try:
+        original_id = asyncio.run(run_lookup())
+
+        if original_id:
+            console.print(f"[bold]Original ID:[/bold] {original_id}")
+        else:
+            console.print(f"[yellow]No mapping found for {anonymous_id}[/yellow]")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        if not isinstance(e, SystemExit):
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from None
+        raise
+
+
+@phi_app.command("export-mapping")
+def phi_export_mapping(
+    batch_id: Annotated[str, typer.Argument(..., help="Load batch UUID to export mappings for")],
+    output: Annotated[Path | None, typer.Option("--output", "-o", help="Output file path")] = None,
+    format: Annotated[
+        str, typer.Option("--format", "-f", help="Output format (json, csv)")
+    ] = "json",
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Export sample ID mappings for a load batch.
+
+    Exports the mapping between anonymous IDs and metadata for authorized users.
+    Note: Original IDs are NOT exported for security; use 'phi lookup' for individual lookups.
+    """
+    import json as json_module
+
+    try:
+        batch_uuid = UUID(batch_id)
+    except ValueError:
+        console.print(f"[red]Error: Invalid UUID format: {batch_id}[/red]")
+        raise typer.Exit(1) from None
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_export():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            rows = await conn.fetch(
+                """
+                SELECT anonymous_id, source_file, created_at
+                FROM phi_vault.sample_id_mapping
+                WHERE load_batch_id = $1
+                ORDER BY created_at
+                """,
+                batch_uuid,
+            )
+            return [dict(row) for row in rows]
+        finally:
+            await conn.close()
+
+    try:
+        mappings = asyncio.run(run_export())
+
+        if not mappings:
+            console.print(f"[yellow]No mappings found for batch {batch_id}[/yellow]")
+            raise typer.Exit(1)
+
+        for m in mappings:
+            m["anonymous_id"] = str(m["anonymous_id"])
+            m["created_at"] = m["created_at"].isoformat()
+
+        if format == "json":
+            content = json_module.dumps(mappings, indent=2)
+        elif format == "csv":
+            import csv
+            import io
+
+            output_io = io.StringIO()
+            writer = csv.DictWriter(
+                output_io, fieldnames=["anonymous_id", "source_file", "created_at"]
+            )
+            writer.writeheader()
+            writer.writerows(mappings)
+            content = output_io.getvalue()
+        else:
+            console.print(f"[red]Unknown format: {format}. Use 'json' or 'csv'[/red]")
+            raise typer.Exit(1)
+
+        if output:
+            with open(output, "w") as f:
+                f.write(content)
+            if not quiet:
+                console.print(f"[green]✓[/green] Exported {len(mappings)} mappings to {output}")
+        else:
+            console.print(content)
+
+    except Exception as e:
+        if not isinstance(e, SystemExit):
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from None
+        raise
+
+
+@phi_app.command("stats")
+def phi_stats(
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Show PHI anonymization statistics."""
+    import json as json_module
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_stats():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            mapping_stats = await conn.fetchrow("SELECT * FROM phi_vault.v_mapping_stats")
+            lookup_stats = await conn.fetchrow("SELECT * FROM phi_vault.v_lookup_stats")
+            return dict(mapping_stats) if mapping_stats else {}, dict(
+                lookup_stats
+            ) if lookup_stats else {}
+        finally:
+            await conn.close()
+
+    try:
+        mapping_stats, lookup_stats = asyncio.run(run_stats())
+
+        for key in ["oldest_mapping", "newest_mapping"]:
+            if key in mapping_stats and mapping_stats[key]:
+                mapping_stats[key] = mapping_stats[key].isoformat()
+        for key in ["first_lookup", "last_lookup"]:
+            if key in lookup_stats and lookup_stats[key]:
+                lookup_stats[key] = lookup_stats[key].isoformat()
+
+        if json_output:
+            output = {"mappings": mapping_stats, "lookups": lookup_stats}
+            console.print(json_module.dumps(output, indent=2))
+        else:
+            console.print("[bold]Sample ID Mappings[/bold]")
+            console.print(f"  Total mappings: {mapping_stats.get('total_mappings', 0):,}")
+            console.print(f"  Unique files: {mapping_stats.get('unique_files', 0)}")
+            console.print(f"  Total batches: {mapping_stats.get('total_batches', 0)}")
+            console.print(f"  Encrypted: {mapping_stats.get('encrypted_count', 0):,}")
+            if mapping_stats.get("oldest_mapping"):
+                console.print(f"  Oldest: {mapping_stats['oldest_mapping']}")
+            if mapping_stats.get("newest_mapping"):
+                console.print(f"  Newest: {mapping_stats['newest_mapping']}")
+
+            console.print()
+            console.print("[bold]Reverse Lookups[/bold]")
+            console.print(f"  Total lookups: {lookup_stats.get('total_lookups', 0):,}")
+            console.print(f"  Unique requesters: {lookup_stats.get('unique_requesters', 0)}")
+            console.print(f"  Failed lookups: {lookup_stats.get('failed_lookups', 0)}")
+            if lookup_stats.get("first_lookup"):
+                console.print(f"  First: {lookup_stats['first_lookup']}")
+            if lookup_stats.get("last_lookup"):
+                console.print(f"  Last: {lookup_stats['last_lookup']}")
+
+    except Exception as e:
+        if not isinstance(e, SystemExit):
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from None
+        raise
+
+
+@phi_app.command("generate-key")
+def phi_generate_key() -> None:
+    """Generate a new PHI encryption key.
+
+    The key should be stored securely and set as VCF_PG_LOADER_PHI_KEY environment variable.
+    """
+    from .phi import PHIEncryptor
+
+    key = PHIEncryptor.generate_key()
+    key_b64 = PHIEncryptor.key_to_base64(key)
+
+    console.print("[bold]Generated PHI Encryption Key:[/bold]")
+    console.print(f"  {key_b64}")
+    console.print()
+    console.print("[yellow]Store this key securely![/yellow]")
+    console.print("Set as environment variable:")
+    console.print(f"  export VCF_PG_LOADER_PHI_KEY='{key_b64}'")
 
 
 def main() -> None:

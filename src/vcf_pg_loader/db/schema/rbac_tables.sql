@@ -67,7 +67,8 @@ INSERT INTO roles (role_name, description, is_system_role) VALUES
     ('data_loader', 'Can load VCF files', true),
     ('data_reader', 'Can query variant data', true),
     ('auditor', 'Can view audit logs', true),
-    ('user_manager', 'Can manage user accounts', true)
+    ('user_manager', 'Can manage user accounts', true),
+    ('phi_admin', 'PHI vault access - sample ID re-identification', true)
 ON CONFLICT (role_name) DO NOTHING;
 
 -- Insert default permissions
@@ -79,7 +80,10 @@ INSERT INTO permissions (permission_name, resource_type, action, description) VA
     ('audit:read', 'audit', 'read', 'Read audit logs'),
     ('users:read', 'user', 'read', 'View user accounts'),
     ('users:write', 'user', 'write', 'Modify user accounts'),
-    ('users:admin', 'user', 'admin', 'Full user administration')
+    ('users:admin', 'user', 'admin', 'Full user administration'),
+    ('phi:lookup', 'phi', 'read', 'Reverse lookup sample IDs from anonymous IDs'),
+    ('phi:export', 'phi', 'read', 'Export PHI mappings'),
+    ('phi:stats', 'phi', 'read', 'View PHI anonymization statistics')
 ON CONFLICT (permission_name) DO NOTHING;
 
 -- Map permissions to roles
@@ -116,6 +120,13 @@ INSERT INTO role_permissions (role_id, permission_id)
 SELECT r.role_id, p.permission_id
 FROM roles r, permissions p
 WHERE r.role_name = 'user_manager' AND p.permission_name IN ('users:read', 'users:write')
+ON CONFLICT DO NOTHING;
+
+-- PHI admin gets phi permissions
+INSERT INTO role_permissions (role_id, permission_id)
+SELECT r.role_id, p.permission_id
+FROM roles r, permissions p
+WHERE r.role_name = 'phi_admin' AND p.permission_name IN ('phi:lookup', 'phi:export', 'phi:stats')
 ON CONFLICT DO NOTHING;
 
 -- Grant permissions to auth_admin role
