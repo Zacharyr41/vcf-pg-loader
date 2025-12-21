@@ -1395,6 +1395,634 @@ def audit_stats(
         raise typer.Exit(1) from None
 
 
+auth_app = typer.Typer(help="User authentication and management (HIPAA 164.312(d))")
+app.add_typer(auth_app, name="auth")
+
+
+def _get_jwt_secret() -> str:
+    import os
+    import secrets as secrets_module
+
+    secret = os.environ.get("VCF_PG_LOADER_JWT_SECRET")
+    if not secret:
+        secret = secrets_module.token_hex(32)
+    return secret
+
+
+@auth_app.command("login")
+def auth_login(
+    username: Annotated[str, typer.Option("--username", "-u", prompt=True, help="Username")],
+    password: Annotated[
+        str, typer.Option("--password", "-p", prompt=True, hide_input=True, help="Password")
+    ],
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Authenticate and create a session."""
+    from .auth import Authenticator, AuthSchemaManager, AuthStatus, SessionStorage
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_login():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            schema_manager = AuthSchemaManager()
+            if not await schema_manager.schema_exists(conn):
+                await schema_manager.create_auth_schema(conn)
+
+            auth = Authenticator(jwt_secret=_get_jwt_secret())
+            result = await auth.authenticate(conn, username, password)
+            return result
+        finally:
+            await conn.close()
+
+    try:
+        result = asyncio.run(run_login())
+
+        if result.status == AuthStatus.SUCCESS and result.token and result.session:
+            storage = SessionStorage()
+            storage.save_token(result.token, result.user.username, result.session.expires_at)
+            if not quiet:
+                console.print(f"[green]✓[/green] Logged in as {result.user.username}")
+                console.print(f"  Session expires: {result.session.expires_at.isoformat()}")
+        else:
+            console.print(f"[red]Login failed: {result.message}[/red]")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        if not isinstance(e, SystemExit):
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from None
+        raise
+
+
+@auth_app.command("logout")
+def auth_logout(
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """End the current session."""
+    from .auth import Authenticator, SessionStorage
+
+    storage = SessionStorage()
+    token, username = storage.load_token()
+
+    if not token:
+        if not quiet:
+            console.print("[yellow]No active session[/yellow]")
+        return
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+    if resolved_db_url:
+
+        async def run_logout():
+            conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+            try:
+                auth = Authenticator(jwt_secret=_get_jwt_secret())
+                await auth.logout(conn, token)
+            finally:
+                await conn.close()
+
+        try:
+            asyncio.run(run_logout())
+        except Exception:
+            pass
+
+    storage.clear_token()
+    if not quiet:
+        console.print(f"[green]✓[/green] Logged out ({username})")
+
+
+@auth_app.command("whoami")
+def auth_whoami(
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Show current authenticated user."""
+    from .auth import Authenticator, SessionStorage
+
+    storage = SessionStorage()
+    token, username = storage.load_token()
+
+    if not token:
+        console.print("[yellow]Not logged in[/yellow]")
+        raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+    if resolved_db_url:
+
+        async def run_whoami():
+            conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+            try:
+                auth = Authenticator(jwt_secret=_get_jwt_secret())
+                session = await auth.validate_session(conn, token)
+                return session
+            finally:
+                await conn.close()
+
+        try:
+            session = asyncio.run(run_whoami())
+            if session:
+                console.print(f"Username: {session.username}")
+                console.print(f"User ID: {session.user_id}")
+                console.print(f"Session ID: {session.session_id}")
+                console.print(f"Expires: {session.expires_at.isoformat()}")
+            else:
+                console.print("[yellow]Session expired or invalid[/yellow]")
+                storage.clear_token()
+                raise typer.Exit(1)
+        except Exception as e:
+            if not isinstance(e, SystemExit):
+                console.print(f"[red]Error: {e}[/red]")
+                raise typer.Exit(1) from None
+            raise
+    else:
+        console.print(f"Username: {username}")
+        console.print("[dim]Connect to database for full session info[/dim]")
+
+
+@auth_app.command("create-user")
+def auth_create_user(
+    username: Annotated[str, typer.Option("--username", "-u", prompt=True, help="Username")],
+    email: Annotated[str | None, typer.Option("--email", "-e", help="Email address")] = None,
+    password: Annotated[
+        str | None,
+        typer.Option("--password", "-p", help="Password (will prompt if not provided)"),
+    ] = None,
+    require_change: bool = typer.Option(
+        True, "--require-change/--no-require-change", help="Require password change on first login"
+    ),
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Create a new user account."""
+    from .auth import Authenticator, AuthSchemaManager, SessionStorage, UserManager
+
+    if password is None:
+        password = typer.prompt("Password", hide_input=True, confirmation_prompt=True)
+
+    storage = SessionStorage()
+    token, _ = storage.load_token()
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_create():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            schema_manager = AuthSchemaManager()
+            if not await schema_manager.schema_exists(conn):
+                await schema_manager.create_auth_schema(conn)
+
+            created_by = None
+            if token:
+                auth = Authenticator(jwt_secret=_get_jwt_secret())
+                session = await auth.validate_session(conn, token)
+                if session:
+                    created_by = session.user_id
+
+            manager = UserManager()
+            user, message = await manager.create_user(
+                conn, username, password, email, created_by, require_change
+            )
+            return user, message
+        finally:
+            await conn.close()
+
+    try:
+        user, message = asyncio.run(run_create())
+        if user:
+            if not quiet:
+                console.print(f"[green]✓[/green] {message}")
+                console.print(f"  User ID: {user.user_id}")
+                console.print(f"  Username: {user.username}")
+                if user.email:
+                    console.print(f"  Email: {user.email}")
+        else:
+            console.print(f"[red]Failed: {message}[/red]")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        if not isinstance(e, SystemExit):
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from None
+        raise
+
+
+@auth_app.command("change-password")
+def auth_change_password(
+    current_password: Annotated[
+        str,
+        typer.Option("--current", "-c", prompt=True, hide_input=True, help="Current password"),
+    ],
+    new_password: Annotated[
+        str,
+        typer.Option(
+            "--new",
+            "-n",
+            prompt=True,
+            hide_input=True,
+            confirmation_prompt=True,
+            help="New password",
+        ),
+    ],
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Change your password."""
+    from .auth import Authenticator, SessionStorage
+
+    storage = SessionStorage()
+    token, _ = storage.load_token()
+
+    if not token:
+        console.print("[red]Not logged in. Use 'vcf-pg-loader auth login' first.[/red]")
+        raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_change():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            auth = Authenticator(jwt_secret=_get_jwt_secret())
+            session = await auth.validate_session(conn, token)
+            if not session:
+                return False, "Session expired"
+
+            success, message = await auth.change_password(
+                conn, session.user_id, current_password, new_password
+            )
+            return success, message
+        finally:
+            await conn.close()
+
+    try:
+        success, message = asyncio.run(run_change())
+        if success:
+            storage.clear_token()
+            if not quiet:
+                console.print(f"[green]✓[/green] {message}")
+                console.print("[dim]Please log in again with your new password[/dim]")
+        else:
+            console.print(f"[red]Failed: {message}[/red]")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        if not isinstance(e, SystemExit):
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from None
+        raise
+
+
+@auth_app.command("reset-password")
+def auth_reset_password(
+    username: Annotated[str, typer.Option("--username", "-u", prompt=True, help="Username")],
+    new_password: Annotated[
+        str | None,
+        typer.Option("--password", "-p", help="New password (will prompt if not provided)"),
+    ] = None,
+    no_require_change: bool = typer.Option(
+        False, "--no-require-change", help="Don't require password change on next login"
+    ),
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Reset a user's password (admin only)."""
+    from .auth import Authenticator, SessionStorage, UserManager
+
+    if new_password is None:
+        new_password = typer.prompt("New password", hide_input=True, confirmation_prompt=True)
+
+    storage = SessionStorage()
+    token, _ = storage.load_token()
+
+    if not token:
+        console.print("[red]Not logged in. Use 'vcf-pg-loader auth login' first.[/red]")
+        raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_reset():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            auth = Authenticator(jwt_secret=_get_jwt_secret())
+            session = await auth.validate_session(conn, token)
+            if not session:
+                return False, "Session expired"
+
+            manager = UserManager()
+            target_user = await manager.get_user_by_username(conn, username)
+            if not target_user:
+                return False, f"User '{username}' not found"
+
+            success, message = await manager.reset_password(
+                conn, target_user.user_id, new_password, require_change=not no_require_change
+            )
+            return success, message
+        finally:
+            await conn.close()
+
+    try:
+        success, message = asyncio.run(run_reset())
+        if success:
+            if not quiet:
+                console.print(f"[green]✓[/green] {message}")
+        else:
+            console.print(f"[red]Failed: {message}[/red]")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        if not isinstance(e, SystemExit):
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from None
+        raise
+
+
+@auth_app.command("list-users")
+def auth_list_users(
+    include_inactive: bool = typer.Option(
+        False, "--include-inactive", "-a", help="Include disabled users"
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """List all users."""
+    import json
+
+    from .auth import AuthSchemaManager, UserManager
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_list():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            schema_manager = AuthSchemaManager()
+            if not await schema_manager.schema_exists(conn):
+                return []
+
+            manager = UserManager()
+            users = await manager.list_users(conn, include_inactive)
+            return users
+        finally:
+            await conn.close()
+
+    try:
+        users = asyncio.run(run_list())
+
+        if json_output:
+            output = []
+            for u in users:
+                output.append(
+                    {
+                        "user_id": u.user_id,
+                        "username": u.username,
+                        "email": u.email,
+                        "is_active": u.is_active,
+                        "is_locked": u.is_locked,
+                        "last_login_at": u.last_login_at.isoformat() if u.last_login_at else None,
+                    }
+                )
+            console.print(json.dumps(output, indent=2))
+        elif users:
+            for u in users:
+                status = ""
+                if not u.is_active:
+                    status = " [red](disabled)[/red]"
+                elif u.is_locked:
+                    status = " [yellow](locked)[/yellow]"
+                console.print(f"[cyan]{u.username}[/cyan]{status}")
+                console.print(f"  ID: {u.user_id}")
+                if u.email:
+                    console.print(f"  Email: {u.email}")
+                if u.last_login_at:
+                    console.print(f"  Last login: {u.last_login_at.isoformat()}")
+                console.print()
+        else:
+            if not quiet:
+                console.print("[dim]No users found[/dim]")
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@auth_app.command("disable-user")
+def auth_disable_user(
+    username: Annotated[str, typer.Option("--username", "-u", prompt=True, help="Username")],
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Disable a user account."""
+    from .auth import Authenticator, SessionStorage, UserManager
+
+    storage = SessionStorage()
+    token, _ = storage.load_token()
+
+    if not token:
+        console.print("[red]Not logged in. Use 'vcf-pg-loader auth login' first.[/red]")
+        raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_disable():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            auth = Authenticator(jwt_secret=_get_jwt_secret())
+            session = await auth.validate_session(conn, token)
+            if not session:
+                return False, "Session expired"
+
+            manager = UserManager()
+            target_user = await manager.get_user_by_username(conn, username)
+            if not target_user:
+                return False, f"User '{username}' not found"
+
+            if target_user.user_id == session.user_id:
+                return False, "Cannot disable your own account"
+
+            success, message = await manager.disable_user(conn, target_user.user_id)
+            return success, message
+        finally:
+            await conn.close()
+
+    try:
+        success, message = asyncio.run(run_disable())
+        if success:
+            if not quiet:
+                console.print(f"[green]✓[/green] {message}")
+        else:
+            console.print(f"[red]Failed: {message}[/red]")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        if not isinstance(e, SystemExit):
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from None
+        raise
+
+
+@auth_app.command("enable-user")
+def auth_enable_user(
+    username: Annotated[str, typer.Option("--username", "-u", prompt=True, help="Username")],
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Enable a disabled user account."""
+    from .auth import Authenticator, SessionStorage, UserManager
+
+    storage = SessionStorage()
+    token, _ = storage.load_token()
+
+    if not token:
+        console.print("[red]Not logged in. Use 'vcf-pg-loader auth login' first.[/red]")
+        raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_enable():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            auth = Authenticator(jwt_secret=_get_jwt_secret())
+            session = await auth.validate_session(conn, token)
+            if not session:
+                return False, "Session expired"
+
+            manager = UserManager()
+            target_user = await manager.get_user_by_username(conn, username)
+            if not target_user:
+                return False, f"User '{username}' not found"
+
+            success, message = await manager.enable_user(conn, target_user.user_id)
+            return success, message
+        finally:
+            await conn.close()
+
+    try:
+        success, message = asyncio.run(run_enable())
+        if success:
+            if not quiet:
+                console.print(f"[green]✓[/green] {message}")
+        else:
+            console.print(f"[red]Failed: {message}[/red]")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        if not isinstance(e, SystemExit):
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from None
+        raise
+
+
+@auth_app.command("unlock-user")
+def auth_unlock_user(
+    username: Annotated[str, typer.Option("--username", "-u", prompt=True, help="Username")],
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Unlock a locked user account."""
+    from .auth import Authenticator, SessionStorage, UserManager
+
+    storage = SessionStorage()
+    token, _ = storage.load_token()
+
+    if not token:
+        console.print("[red]Not logged in. Use 'vcf-pg-loader auth login' first.[/red]")
+        raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_unlock():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            auth = Authenticator(jwt_secret=_get_jwt_secret())
+            session = await auth.validate_session(conn, token)
+            if not session:
+                return False, "Session expired"
+
+            manager = UserManager()
+            target_user = await manager.get_user_by_username(conn, username)
+            if not target_user:
+                return False, f"User '{username}' not found"
+
+            success, message = await manager.unlock_user(conn, target_user.user_id)
+            return success, message
+        finally:
+            await conn.close()
+
+    try:
+        success, message = asyncio.run(run_unlock())
+        if success:
+            if not quiet:
+                console.print(f"[green]✓[/green] {message}")
+        else:
+            console.print(f"[red]Failed: {message}[/red]")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        if not isinstance(e, SystemExit):
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from None
+        raise
+
+
 def main() -> None:
     """Entry point for the CLI."""
     app()
