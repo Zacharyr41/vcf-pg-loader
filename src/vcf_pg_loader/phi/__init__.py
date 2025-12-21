@@ -7,7 +7,9 @@ identifiable information from VCF sample names while maintaining
 secure linkage capability for authorized users.
 """
 
+from .alerting import AlertAction, AlertConfig, AlertEvent, LoadContext, PHIAlertHandler
 from .anonymizer import SampleAnonymizer
+from .detector import PHIDetection, PHIDetector, PHIScanReport
 from .encryption import PHIEncryptor
 from .header_sanitizer import (
     PHIScanner,
@@ -17,16 +19,27 @@ from .header_sanitizer import (
     SanitizedHeader,
     VCFHeaderSanitizer,
 )
+from .patterns import PHIPattern, PHIPatternRegistry
 from .schema import PHISchemaManager
 
 __all__ = [
-    "SampleAnonymizer",
+    "AlertAction",
+    "AlertConfig",
+    "AlertEvent",
+    "LoadContext",
+    "PHIAlertHandler",
+    "PHIDetection",
+    "PHIDetector",
     "PHIEncryptor",
-    "PHISchemaManager",
-    "PHIScanner",
+    "PHIPattern",
+    "PHIPatternRegistry",
+    "PHIScanReport",
     "PHIScanResult",
+    "PHISchemaManager",
+    "SampleAnonymizer",
     "SanitizationConfig",
     "SanitizationReport",
     "SanitizedHeader",
     "VCFHeaderSanitizer",
+    "PHIScanner",
 ]

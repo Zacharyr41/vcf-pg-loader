@@ -3259,6 +3259,235 @@ def phi_report(
         raise
 
 
+@phi_app.command("detect")
+def phi_detect(
+    vcf_path: Path = typer.Argument(..., help="Path to VCF file to scan"),
+    sample_rate: float = typer.Option(
+        1.0, "--sample-rate", "-s", help="Sample rate for records (0.0-1.0)"
+    ),
+    max_records: Annotated[
+        int | None, typer.Option("--max-records", "-m", help="Max records to scan")
+    ] = None,
+    scan_headers: bool = typer.Option(
+        True, "--scan-headers/--no-scan-headers", help="Scan header lines"
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+) -> None:
+    """Perform full PHI detection scan on a VCF file.
+
+    Scans headers, INFO fields, FORMAT fields, and sample data for potential PHI
+    using configurable patterns with severity levels.
+    """
+    import json
+
+    from .phi import PHIDetector
+
+    if not vcf_path.exists():
+        console.print(f"[red]Error: VCF file not found: {vcf_path}[/red]")
+        raise typer.Exit(1)
+
+    detector = PHIDetector()
+    report = detector.scan_vcf_stream(
+        vcf_path,
+        sample_rate=sample_rate,
+        max_records=max_records,
+        scan_headers=scan_headers,
+    )
+
+    if json_output:
+        output = {
+            "has_phi": report.has_phi,
+            "risk_level": report.risk_level,
+            "records_scanned": report.records_scanned,
+            "records_total": report.records_total,
+            "sample_rate": report.sample_rate,
+            "summary": report.summary,
+            "severity_summary": report.severity_summary,
+            "detections": [
+                {
+                    "pattern": d.pattern_name,
+                    "severity": d.severity,
+                    "location": d.location,
+                    "line": d.line_number,
+                    "masked_value": d.masked_value,
+                    "context": d.context[:100] if d.context else None,
+                    "false_positive_hints": d.false_positive_hints,
+                }
+                for d in report.detections
+            ],
+        }
+        console.print(json.dumps(output, indent=2))
+    else:
+        if report.has_phi:
+            console.print(f"[yellow]⚠[/yellow]  PHI detected (risk level: {report.risk_level})")
+            console.print(
+                f"  Records scanned: {report.records_scanned:,} / {report.records_total:,}"
+            )
+            console.print()
+            console.print("[bold]Summary by pattern:[/bold]")
+            for pattern_type, count in report.summary.items():
+                console.print(f"  {pattern_type}: {count}")
+            console.print()
+            console.print("[bold]Summary by severity:[/bold]")
+            for severity, count in report.severity_summary.items():
+                console.print(f"  {severity}: {count}")
+            console.print()
+            console.print("[bold]Detections (first 20):[/bold]")
+            for detection in report.detections[:20]:
+                hints = (
+                    f" (hints: {', '.join(detection.false_positive_hints)})"
+                    if detection.false_positive_hints
+                    else ""
+                )
+                console.print(
+                    f"  [{detection.severity}] {detection.pattern_name} at {detection.location}"
+                    f" (line {detection.line_number}): {detection.masked_value}{hints}"
+                )
+            if len(report.detections) > 20:
+                console.print(f"  ... and {len(report.detections) - 20} more")
+            raise typer.Exit(1)
+        else:
+            console.print("[green]✓[/green] No PHI detected")
+            console.print(
+                f"  Records scanned: {report.records_scanned:,} / {report.records_total:,}"
+            )
+
+
+patterns_app = typer.Typer(help="Manage PHI detection patterns")
+phi_app.add_typer(patterns_app, name="patterns")
+
+
+@patterns_app.command("list")
+def phi_patterns_list(
+    severity: Annotated[
+        str | None, typer.Option("--severity", "-s", help="Filter by severity")
+    ] = None,
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+) -> None:
+    """List all registered PHI detection patterns."""
+    import json
+
+    from .phi import PHIPatternRegistry
+
+    registry = PHIPatternRegistry()
+
+    if severity:
+        patterns = registry.get_patterns_by_severity(severity)
+    else:
+        patterns = registry.patterns
+
+    if json_output:
+        output = [
+            {
+                "name": p.name,
+                "severity": p.severity,
+                "description": p.description,
+                "pattern": p.pattern.pattern,
+                "false_positive_hints": p.false_positive_hints,
+            }
+            for p in patterns
+        ]
+        console.print(json.dumps(output, indent=2))
+    else:
+        console.print(f"[bold]PHI Detection Patterns ({len(patterns)} total)[/bold]")
+        console.print()
+        for p in sorted(patterns, key=lambda x: (x.severity, x.name)):
+            severity_color = {
+                "critical": "red",
+                "high": "yellow",
+                "medium": "blue",
+                "low": "dim",
+            }.get(p.severity, "white")
+            console.print(f"  [{severity_color}]{p.severity:8}[/{severity_color}] {p.name}")
+            console.print(f"             {p.description}")
+            if p.false_positive_hints:
+                console.print(f"             [dim]Hints: {', '.join(p.false_positive_hints)}[/dim]")
+
+
+@patterns_app.command("test")
+def phi_patterns_test(
+    pattern: str = typer.Option(..., "--pattern", "-p", help="Regex pattern to test"),
+    input_text: str = typer.Option(..., "--input", "-i", help="Text to test against"),
+    case_insensitive: bool = typer.Option(
+        False, "--ignore-case", "-I", help="Case insensitive matching"
+    ),
+) -> None:
+    """Test a regex pattern against input text."""
+    import re
+
+    flags = re.IGNORECASE if case_insensitive else 0
+    try:
+        compiled = re.compile(pattern, flags)
+    except re.error as e:
+        console.print(f"[red]Invalid regex pattern: {e}[/red]")
+        raise typer.Exit(1) from None
+
+    matches = list(compiled.finditer(input_text))
+
+    if matches:
+        console.print(f"[green]✓[/green] Found {len(matches)} match(es):")
+        for i, match in enumerate(matches, 1):
+            console.print(f"  {i}. '{match.group()}' at position {match.start()}-{match.end()}")
+    else:
+        console.print("[yellow]No matches found[/yellow]")
+
+
+@patterns_app.command("add")
+def phi_patterns_add(
+    name: str = typer.Option(..., "--name", "-n", help="Pattern name"),
+    pattern: str = typer.Option(..., "--pattern", "-p", help="Regex pattern"),
+    severity: str = typer.Option(
+        ..., "--severity", "-s", help="Severity: critical, high, medium, low"
+    ),
+    description: str = typer.Option("", "--description", "-d", help="Pattern description"),
+    config_path: Path = typer.Option(
+        "phi_patterns.toml", "--config", "-c", help="Config file to write to"
+    ),
+) -> None:
+    """Add a custom PHI pattern to a configuration file."""
+    import re
+
+    import tomli_w
+
+    if severity not in ("critical", "high", "medium", "low"):
+        console.print(
+            f"[red]Invalid severity: {severity}. Must be one of: critical, high, medium, low[/red]"
+        )
+        raise typer.Exit(1)
+
+    try:
+        re.compile(pattern)
+    except re.error as e:
+        console.print(f"[red]Invalid regex pattern: {e}[/red]")
+        raise typer.Exit(1) from None
+
+    if config_path.exists():
+        with open(config_path, "rb") as f:
+            import tomllib
+
+            data = tomllib.load(f)
+    else:
+        data = {"patterns": []}
+
+    if "patterns" not in data:
+        data["patterns"] = []
+
+    data["patterns"].append(
+        {
+            "name": name,
+            "pattern": pattern,
+            "severity": severity,
+            "description": description,
+            "false_positive_hints": [],
+        }
+    )
+
+    with open(config_path, "wb") as f:
+        tomli_w.dump(data, f)
+
+    console.print(f"[green]✓[/green] Pattern '{name}' added to {config_path}")
+
+
 def main() -> None:
     """Entry point for the CLI."""
     app()
