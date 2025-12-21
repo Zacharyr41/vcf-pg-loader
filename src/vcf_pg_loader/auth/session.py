@@ -1,6 +1,7 @@
 """Local session token storage.
 
 Securely stores authentication tokens on the local filesystem.
+HIPAA Reference: 164.312(a)(2)(iii) - Automatic logoff
 """
 
 import json
@@ -9,6 +10,7 @@ import os
 import stat
 from datetime import datetime
 from pathlib import Path
+from uuid import UUID
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +26,14 @@ class SessionStorage:
         self._session_file.parent.mkdir(parents=True, exist_ok=True)
         os.chmod(self._session_file.parent, stat.S_IRWXU)
 
-    def save_token(self, token: str, username: str, expires_at: datetime) -> None:
+    def save_token(
+        self,
+        token: str,
+        username: str,
+        expires_at: datetime,
+        session_id: UUID | str | None = None,
+        inactivity_timeout_minutes: int | None = None,
+    ) -> None:
         self._ensure_directory()
 
         data = {
@@ -33,6 +42,12 @@ class SessionStorage:
             "expires_at": expires_at.isoformat(),
             "saved_at": datetime.now().isoformat(),
         }
+
+        if session_id is not None:
+            data["session_id"] = str(session_id)
+
+        if inactivity_timeout_minutes is not None:
+            data["inactivity_timeout_minutes"] = inactivity_timeout_minutes
 
         with open(self._session_file, "w") as f:
             json.dump(data, f)
