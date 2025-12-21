@@ -1,18 +1,85 @@
 """Configuration file support for vcf-pg-loader."""
 
+import logging
 import tomllib
 from pathlib import Path
 from typing import Any
 
 from .loader import LoadConfig
 
+logger = logging.getLogger(__name__)
+
 VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+
+CREDENTIAL_KEYS = {
+    "password",
+    "db_password",
+    "database_password",
+    "secret",
+    "api_key",
+    "token",
+    "credentials",
+    "auth",
+}
 
 
 class ConfigValidationError(Exception):
     """Raised when configuration validation fails."""
 
     pass
+
+
+class CredentialInConfigError(Exception):
+    """Raised when credentials are detected in configuration files."""
+
+    pass
+
+
+def detect_credentials_in_config(
+    config_dict: dict[str, Any],
+    path: str = "",
+    warn_only: bool = True,
+) -> list[str]:
+    """Detect potential credentials in configuration dictionary.
+
+    Args:
+        config_dict: Configuration dictionary to check.
+        path: Current path in nested config (for error messages).
+        warn_only: If True, emit warning. If False, raise error.
+
+    Returns:
+        List of detected credential key paths.
+
+    Raises:
+        CredentialInConfigError: If credentials found and warn_only=False.
+    """
+    detected = []
+
+    for key, value in config_dict.items():
+        current_path = f"{path}.{key}" if path else key
+        key_lower = key.lower()
+
+        if key_lower in CREDENTIAL_KEYS or any(
+            cred_key in key_lower for cred_key in CREDENTIAL_KEYS
+        ):
+            if value and value != "":
+                detected.append(current_path)
+
+        if isinstance(value, dict):
+            detected.extend(detect_credentials_in_config(value, current_path, warn_only=True))
+
+    if detected:
+        msg = (
+            f"Potential credentials detected in config file: {', '.join(detected)}. "
+            "For HIPAA compliance, secrets must be provided via environment "
+            "variables or secrets manager, not configuration files."
+        )
+        if warn_only:
+            logger.warning(msg)
+        else:
+            raise CredentialInConfigError(msg)
+
+    return detected
 
 
 def validate_config(config_dict: dict[str, Any]) -> None:
@@ -28,20 +95,14 @@ def validate_config(config_dict: dict[str, Any]) -> None:
                 f"batch_size must be an integer, got {type(batch_size).__name__}"
             )
         if batch_size <= 0:
-            raise ConfigValidationError(
-                f"batch_size must be positive, got {batch_size}"
-            )
+            raise ConfigValidationError(f"batch_size must be positive, got {batch_size}")
 
     if "workers" in config_dict:
         workers = config_dict["workers"]
         if not isinstance(workers, int):
-            raise ConfigValidationError(
-                f"workers must be an integer, got {type(workers).__name__}"
-            )
+            raise ConfigValidationError(f"workers must be an integer, got {type(workers).__name__}")
         if workers <= 0:
-            raise ConfigValidationError(
-                f"workers must be positive, got {workers}"
-            )
+            raise ConfigValidationError(f"workers must be positive, got {workers}")
 
     if "log_level" in config_dict:
         log_level = config_dict["log_level"]
@@ -55,10 +116,7 @@ def validate_config(config_dict: dict[str, Any]) -> None:
             )
 
 
-def load_config(
-    config_path: Path,
-    overrides: dict[str, Any] | None = None
-) -> LoadConfig:
+def load_config(config_path: Path, overrides: dict[str, Any] | None = None) -> LoadConfig:
     """Load configuration from a TOML file.
 
     Args:
@@ -77,6 +135,8 @@ def load_config(
 
     with open(config_path, "rb") as f:
         toml_data = tomllib.load(f)
+
+    detect_credentials_in_config(toml_data, warn_only=True)
 
     config_dict = toml_data.get("vcf_pg_loader", {})
 
