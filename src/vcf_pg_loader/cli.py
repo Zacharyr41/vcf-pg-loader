@@ -1096,13 +1096,22 @@ def db_reset(
 
 
 @app.command()
-def doctor() -> None:
+def doctor(
+    check_container_security: bool = typer.Option(
+        False,
+        "--check-container-security",
+        help="Run container security checks for HIPAA compliance",
+    ),
+) -> None:
     """Check system dependencies and configuration.
 
     Verifies that all required dependencies are installed and
     provides installation instructions for any that are missing.
+
+    Use --check-container-security to validate container security
+    settings when running inside a Docker container.
     """
-    from .doctor import DependencyChecker
+    from .doctor import ContainerSecurityChecker, DependencyChecker
 
     console.print("\n[bold]vcf-pg-loader System Check[/bold]")
     console.print("─" * 30)
@@ -1121,14 +1130,36 @@ def doctor() -> None:
             if result.message:
                 console.print(f"    {result.message}")
 
+    if check_container_security:
+        console.print("\n[bold]Container Security Checks[/bold]")
+        console.print("─" * 30)
+
+        security_checker = ContainerSecurityChecker()
+        security_results = security_checker.check_all()
+
+        for result in security_results:
+            if result.passed:
+                version_str = f" ({result.version})" if result.version else ""
+                console.print(f"[green]✓[/green] {result.name}{version_str}")
+                if result.message:
+                    console.print(f"    [dim]{result.message}[/dim]")
+            else:
+                all_passed = False
+                console.print(f"[red]✗[/red] {result.name}")
+                if result.message:
+                    console.print(f"    {result.message}")
+
     console.print()
 
     if all_passed:
         console.print("[green]All systems ready![/green]")
     else:
-        console.print("[yellow]Some dependencies are missing.[/yellow]")
-        console.print("\nNote: Parsing and benchmarks work without Docker.")
-        console.print("      Database features require Docker or external PostgreSQL.")
+        console.print("[yellow]Some checks failed.[/yellow]")
+        if not check_container_security:
+            console.print("\nNote: Parsing and benchmarks work without Docker.")
+            console.print("      Database features require Docker or external PostgreSQL.")
+        else:
+            console.print("\nSee docs/deployment/container-security.md for remediation.")
 
 
 audit_app = typer.Typer(help="HIPAA audit log management and verification")
@@ -3486,6 +3517,806 @@ def phi_patterns_add(
         tomli_w.dump(data, f)
 
     console.print(f"[green]✓[/green] Pattern '{name}' added to {config_path}")
+
+
+security_app = typer.Typer(help="Security and encryption management (HIPAA 164.312(a)(2)(iv))")
+app.add_typer(security_app, name="security")
+
+
+@security_app.command("check-encryption")
+def security_check_encryption(
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Check PHI encryption status and configuration.
+
+    Verifies that encryption is properly configured and reports on
+    encrypted vs unencrypted data in the database.
+    """
+    import json as json_module
+
+    from .phi import check_encryption_status
+
+    status = check_encryption_status()
+
+    db_stats = None
+    if db_url or os.environ.get("POSTGRES_URL") or os.environ.get("PGHOST"):
+        try:
+            resolved_db_url = _resolve_database_url(db_url, quiet)
+            if resolved_db_url:
+
+                async def get_db_stats():
+                    conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+                    try:
+                        row = await conn.fetchrow(
+                            """
+                            SELECT
+                                COUNT(*) as total,
+                                COUNT(*) FILTER (WHERE original_id_encrypted IS NOT NULL) as encrypted,
+                                COUNT(*) FILTER (WHERE original_id_encrypted IS NULL) as unencrypted
+                            FROM phi_vault.sample_id_mapping
+                            """
+                        )
+                        return dict(row) if row else None
+                    except Exception:
+                        return None
+                    finally:
+                        await conn.close()
+
+                db_stats = asyncio.run(get_db_stats())
+        except Exception:
+            pass
+
+    if json_output:
+        output = {
+            "enabled": status.enabled,
+            "algorithm": status.algorithm,
+            "key_source": status.key_source.value if status.key_source else None,
+            "key_id": status.key_id,
+            "library_version": status.library_version,
+        }
+        if db_stats:
+            output["database"] = db_stats
+        console.print(json_module.dumps(output, indent=2))
+    else:
+        console.print("[bold]PHI Encryption Status[/bold]")
+        if status.enabled:
+            console.print("  Status: [green]Enabled[/green]")
+            console.print(f"  Algorithm: {status.algorithm}")
+            console.print(
+                f"  Key Source: {status.key_source.value if status.key_source else 'unknown'}"
+            )
+            if status.key_id:
+                console.print(f"  Key ID: {status.key_id}")
+            console.print(f"  Library: cryptography {status.library_version}")
+        else:
+            console.print("  Status: [red]Disabled[/red]")
+            console.print("  Set VCF_PG_LOADER_PHI_KEY environment variable to enable.")
+            console.print(f"  Library: cryptography {status.library_version}")
+
+        if db_stats:
+            console.print()
+            console.print("[bold]Database Encryption Stats[/bold]")
+            console.print(f"  Total mappings: {db_stats['total']:,}")
+            console.print(f"  Encrypted: {db_stats['encrypted']:,}")
+            console.print(f"  Unencrypted: {db_stats['unencrypted']:,}")
+            if db_stats["total"] > 0:
+                pct = (db_stats["encrypted"] / db_stats["total"]) * 100
+                console.print(f"  Coverage: {pct:.1f}%")
+
+
+@security_app.command("generate-key")
+def security_generate_key(
+    output: Annotated[Path | None, typer.Option("--output", "-o", help="Write key to file")] = None,
+    raw: bool = typer.Option(False, "--raw", help="Output only the key, no formatting"),
+) -> None:
+    """Generate a new 256-bit AES encryption key.
+
+    The key is output as base64 and can be used with VCF_PG_LOADER_PHI_KEY.
+    """
+    from .phi import PHIEncryptor
+
+    key = PHIEncryptor.generate_key()
+    key_b64 = PHIEncryptor.key_to_base64(key)
+
+    if output:
+        output.write_text(key_b64 + "\n")
+        output.chmod(0o600)
+        if not raw:
+            console.print(f"[green]✓[/green] Key written to {output}")
+            console.print("  Permissions set to 0600")
+            console.print()
+            console.print("To use this key:")
+            console.print(f'  export VCF_PG_LOADER_PHI_KEY_FILE="{output.absolute()}"')
+    else:
+        if raw:
+            console.print(key_b64)
+        else:
+            console.print("[bold]Generated Encryption Key[/bold]")
+            console.print()
+            console.print(f"  {key_b64}")
+            console.print()
+            console.print("To use this key:")
+            console.print(f'  export VCF_PG_LOADER_PHI_KEY="{key_b64}"')
+            console.print()
+            console.print(
+                "[yellow]Warning:[/yellow] Store this key securely. Loss of key = loss of data."
+            )
+
+
+@security_app.command("rotate-key")
+def security_rotate_key(
+    new_key: Annotated[
+        str, typer.Option("--new-key", "-n", help="New encryption key (base64)")
+    ] = None,
+    new_key_file: Annotated[
+        Path | None, typer.Option("--new-key-file", help="File containing new key")
+    ] = None,
+    batch_size: int = typer.Option(1000, "--batch-size", "-b", help="Rows per batch"),
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show what would be rotated without changing data"
+    ),
+) -> None:
+    """Rotate encryption key for all PHI data.
+
+    Re-encrypts all data with a new key. The old key is read from
+    VCF_PG_LOADER_PHI_KEY environment variable.
+
+    This operation is atomic per batch and can be interrupted safely.
+    """
+    from .phi import KeyRotator, PHIEncryptor
+
+    if new_key is None and new_key_file is None:
+        console.print("[red]Error: Provide --new-key or --new-key-file[/red]")
+        raise typer.Exit(1)
+
+    try:
+        old_encryptor = PHIEncryptor()
+        if not old_encryptor.is_available:
+            console.print("[red]Error: Old key not available. Set VCF_PG_LOADER_PHI_KEY.[/red]")
+            raise typer.Exit(1)
+    except Exception as e:
+        console.print(f"[red]Error loading old key: {e}[/red]")
+        raise typer.Exit(1) from None
+
+    try:
+        if new_key_file:
+            new_key_bytes = PHIEncryptor.key_from_base64(new_key_file.read_text().strip())
+        else:
+            new_key_bytes = PHIEncryptor.key_from_base64(new_key)
+        new_encryptor = PHIEncryptor(key=new_key_bytes)
+    except Exception as e:
+        console.print(f"[red]Error loading new key: {e}[/red]")
+        raise typer.Exit(1) from None
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        console.print("[red]Error: Database connection required for key rotation[/red]")
+        raise typer.Exit(1)
+
+    async def run_rotation():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            count = await conn.fetchval(
+                "SELECT COUNT(*) FROM phi_vault.sample_id_mapping WHERE original_id_encrypted IS NOT NULL"
+            )
+
+            if count == 0:
+                return 0
+
+            if dry_run:
+                return count
+
+            rotator = KeyRotator(old_encryptor, new_encryptor)
+
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+                console=console,
+            ) as progress:
+                task = progress.add_task("Rotating keys...", total=count)
+
+                def update_progress(processed, total):
+                    progress.update(task, completed=processed)
+
+                rotated = await rotator.rotate_table(
+                    conn,
+                    batch_size=batch_size,
+                    progress_callback=update_progress,
+                )
+                return rotated
+        finally:
+            await conn.close()
+
+    try:
+        if dry_run:
+            count = asyncio.run(run_rotation())
+            console.print(f"[bold]Dry Run:[/bold] Would rotate {count:,} encrypted rows")
+            console.print("Run without --dry-run to perform rotation.")
+        else:
+            rotated = asyncio.run(run_rotation())
+            if rotated == 0:
+                console.print("[yellow]No encrypted rows found to rotate[/yellow]")
+            else:
+                console.print(f"[green]✓[/green] Rotated {rotated:,} rows")
+                console.print()
+                console.print("[bold]Next steps:[/bold]")
+                console.print("1. Update VCF_PG_LOADER_PHI_KEY with new key")
+                console.print("2. Verify data access works with new key")
+                console.print("3. Securely delete old key")
+    except Exception as e:
+        console.print(f"[red]Error during key rotation: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+data_app = typer.Typer(help="Data management and HIPAA-compliant disposal (164.530(j))")
+app.add_typer(data_app, name="data")
+
+
+@data_app.command("dispose")
+def data_dispose(
+    batch_id: Annotated[UUID | None, typer.Option("--batch-id", "-b", help="Batch UUID")] = None,
+    sample_id: Annotated[UUID | None, typer.Option("--sample-id", "-s", help="Sample UUID")] = None,
+    reason: Annotated[str, typer.Option("--reason", "-r", help="Reason for disposal")] = None,
+    user_id: Annotated[int, typer.Option("--user-id", "-u", help="Authorizing user ID")] = None,
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    require_second_auth: bool = typer.Option(
+        True, "--require-second-auth/--no-second-auth", help="Require two-person authorization"
+    ),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    json_output: bool = typer.Option(False, "--json", "-j", help="Output as JSON"),
+) -> None:
+    """Request secure disposal of PHI data.
+
+    Disposes all data for a batch (--batch-id) or sample (--sample-id).
+    Creates a disposal request that may require second authorization.
+
+    \b
+    HIPAA Reference: 164.530(j) - Retention and Disposal
+    """
+    import json as json_module
+
+    from .data import DataDisposal
+
+    if not batch_id and not sample_id:
+        console.print("[red]Error: Provide --batch-id or --sample-id[/red]")
+        raise typer.Exit(1)
+
+    if batch_id and sample_id:
+        console.print("[red]Error: Provide only one of --batch-id or --sample-id[/red]")
+        raise typer.Exit(1)
+
+    if not reason:
+        console.print("[red]Error: --reason is required[/red]")
+        raise typer.Exit(1)
+
+    if not user_id:
+        console.print("[red]Error: --user-id is required[/red]")
+        raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+    if not resolved_db_url:
+        console.print("[red]Error: Database connection required[/red]")
+        raise typer.Exit(1)
+
+    async def run_disposal():
+        pool = await asyncpg.create_pool(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            disposal = DataDisposal(pool, require_two_person_auth=require_second_auth)
+
+            if batch_id:
+                result = await disposal.dispose_batch(
+                    batch_id=batch_id,
+                    reason=reason,
+                    authorized_by=user_id,
+                )
+            else:
+                result = await disposal.dispose_sample(
+                    sample_anonymous_id=sample_id,
+                    reason=reason,
+                    authorized_by=user_id,
+                )
+
+            return result
+        finally:
+            await pool.close()
+
+    try:
+        result = asyncio.run(run_disposal())
+
+        if json_output:
+            output = {
+                "disposal_id": str(result.disposal_id),
+                "type": result.disposal_type.value,
+                "target": result.target_identifier,
+                "status": result.status.value,
+                "variants_disposed": result.variants_disposed,
+                "mappings_disposed": result.mappings_disposed,
+            }
+            console.print(json_module.dumps(output, indent=2))
+        else:
+            console.print("[bold]Disposal Request Created[/bold]")
+            console.print(f"  ID: {result.disposal_id}")
+            console.print(f"  Type: {result.disposal_type.value}")
+            console.print(f"  Target: {result.target_identifier}")
+            console.print(f"  Status: {result.status.value}")
+
+            if result.status.value == "pending":
+                console.print()
+                console.print("[yellow]Second authorization required.[/yellow]")
+                console.print(
+                    f"Run: vcf-pg-loader data authorize "
+                    f"--disposal-id {result.disposal_id} --user-id <id>"
+                )
+            elif result.status.value == "completed":
+                console.print(f"  Variants disposed: {result.variants_disposed:,}")
+                console.print(f"  Mappings disposed: {result.mappings_disposed:,}")
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@data_app.command("authorize")
+def data_authorize(
+    disposal_id: Annotated[UUID, typer.Option("--disposal-id", "-i", help="Disposal UUID")],
+    user_id: Annotated[int, typer.Option("--user-id", "-u", help="Authorizing user ID")],
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Provide second authorization for a pending disposal.
+
+    Required when two-person authorization is enabled.
+    The second authorizer must be different from the first.
+    """
+    from .data import DataDisposal
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+    if not resolved_db_url:
+        console.print("[red]Error: Database connection required[/red]")
+        raise typer.Exit(1)
+
+    async def run_auth():
+        pool = await asyncpg.create_pool(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            disposal = DataDisposal(pool)
+            return await disposal.authorize_disposal(disposal_id, user_id)
+        finally:
+            await pool.close()
+
+    try:
+        asyncio.run(run_auth())
+        console.print(f"[green]✓[/green] Disposal {disposal_id} authorized")
+        console.print(f"Run: vcf-pg-loader data execute --disposal-id {disposal_id} --user-id <id>")
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@data_app.command("execute")
+def data_execute(
+    disposal_id: Annotated[UUID, typer.Option("--disposal-id", "-i", help="Disposal UUID")],
+    user_id: Annotated[int, typer.Option("--user-id", "-u", help="Executor user ID")],
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    json_output: bool = typer.Option(False, "--json", "-j", help="Output as JSON"),
+) -> None:
+    """Execute an authorized disposal.
+
+    Permanently deletes data. This action cannot be undone.
+    """
+    import json as json_module
+
+    from .data import DataDisposal
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+    if not resolved_db_url:
+        console.print("[red]Error: Database connection required[/red]")
+        raise typer.Exit(1)
+
+    async def run_execute():
+        pool = await asyncpg.create_pool(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            disposal = DataDisposal(pool)
+            return await disposal.execute_disposal(disposal_id, user_id)
+        finally:
+            await pool.close()
+
+    try:
+        result = asyncio.run(run_execute())
+
+        if json_output:
+            output = {
+                "disposal_id": str(result.disposal_id),
+                "status": result.status.value,
+                "variants_disposed": result.variants_disposed,
+                "mappings_disposed": result.mappings_disposed,
+                "executed_at": result.executed_at.isoformat() if result.executed_at else None,
+            }
+            console.print(json_module.dumps(output, indent=2))
+        else:
+            console.print(f"[green]✓[/green] Disposal {disposal_id} executed")
+            console.print(f"  Variants disposed: {result.variants_disposed:,}")
+            console.print(f"  Mappings disposed: {result.mappings_disposed:,}")
+            console.print()
+            console.print(
+                f"Verify: vcf-pg-loader data verify-disposal "
+                f"--disposal-id {disposal_id} --user-id <id>"
+            )
+
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@data_app.command("verify-disposal")
+def data_verify_disposal(
+    disposal_id: Annotated[UUID, typer.Option("--disposal-id", "-i", help="Disposal UUID")],
+    user_id: Annotated[int, typer.Option("--user-id", "-u", help="Verifier user ID")],
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    json_output: bool = typer.Option(False, "--json", "-j", help="Output as JSON"),
+) -> None:
+    """Verify data was properly disposed.
+
+    Checks that no data remains for the disposed target.
+    Required before generating a certificate of destruction.
+    """
+    import json as json_module
+
+    from .data import DataDisposal
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+    if not resolved_db_url:
+        console.print("[red]Error: Database connection required[/red]")
+        raise typer.Exit(1)
+
+    async def run_verify():
+        pool = await asyncpg.create_pool(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            disposal = DataDisposal(pool)
+            return await disposal.verify_disposal(disposal_id, user_id)
+        finally:
+            await pool.close()
+
+    try:
+        result = asyncio.run(run_verify())
+
+        if json_output:
+            output = {
+                "disposal_id": str(result.disposal_id),
+                "passed": result.passed,
+                "remaining_variants": result.remaining_variants,
+                "expected_deleted": result.expected_deleted,
+                "verified_at": result.verified_at.isoformat() if result.verified_at else None,
+            }
+            console.print(json_module.dumps(output, indent=2))
+        else:
+            if result.passed:
+                console.print("[green]✓[/green] Verification PASSED")
+                console.print(f"  Expected deleted: {result.expected_deleted:,}")
+                console.print(f"  Remaining: {result.remaining_variants}")
+                console.print()
+                console.print(
+                    f"Generate certificate: vcf-pg-loader data certificate "
+                    f"--disposal-id {disposal_id}"
+                )
+            else:
+                console.print("[red]✗[/red] Verification FAILED")
+                console.print(f"  Expected deleted: {result.expected_deleted:,}")
+                console.print(f"  Remaining: {result.remaining_variants:,}")
+
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@data_app.command("certificate")
+def data_certificate(
+    disposal_id: Annotated[UUID, typer.Option("--disposal-id", "-i", help="Disposal UUID")],
+    output: Annotated[Path | None, typer.Option("--output", "-o", help="Output file path")] = None,
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Generate a certificate of destruction.
+
+    Requires the disposal to be verified (verification status = passed).
+    The certificate includes a cryptographic hash for integrity verification.
+    """
+    from .data import DataDisposal
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+    if not resolved_db_url:
+        console.print("[red]Error: Database connection required[/red]")
+        raise typer.Exit(1)
+
+    async def run_certificate():
+        pool = await asyncpg.create_pool(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            disposal = DataDisposal(pool)
+            return await disposal.generate_disposal_certificate(disposal_id)
+        finally:
+            await pool.close()
+
+    try:
+        cert = asyncio.run(run_certificate())
+        cert_json = cert.to_json()
+
+        if output:
+            output.write_text(cert_json)
+            console.print(f"[green]✓[/green] Certificate written to {output}")
+            console.print(f"  Hash: {cert.certificate_hash}")
+        else:
+            console.print(cert_json)
+
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@data_app.command("list-disposals")
+def data_list_disposals(
+    start_date: Annotated[
+        str | None, typer.Option("--start-date", help="Start date (YYYY-MM-DD)")
+    ] = None,
+    end_date: Annotated[
+        str | None, typer.Option("--end-date", help="End date (YYYY-MM-DD)")
+    ] = None,
+    status: Annotated[str | None, typer.Option("--status", "-s", help="Filter by status")] = None,
+    limit: int = typer.Option(100, "--limit", "-l", help="Max records to return"),
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    json_output: bool = typer.Option(False, "--json", "-j", help="Output as JSON"),
+) -> None:
+    """List disposal records with optional filtering."""
+    import json as json_module
+    from datetime import datetime
+
+    from .data import DataDisposal, DisposalStatus
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+    if not resolved_db_url:
+        console.print("[red]Error: Database connection required[/red]")
+        raise typer.Exit(1)
+
+    start_dt = datetime.fromisoformat(start_date) if start_date else None
+    end_dt = datetime.fromisoformat(end_date) if end_date else None
+    status_enum = DisposalStatus(status) if status else None
+
+    async def run_list():
+        pool = await asyncpg.create_pool(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            disposal = DataDisposal(pool)
+            return await disposal.list_disposals(
+                start_date=start_dt,
+                end_date=end_dt,
+                status=status_enum,
+                limit=limit,
+            )
+        finally:
+            await pool.close()
+
+    try:
+        records = asyncio.run(run_list())
+
+        if json_output:
+
+            def serialize(obj):
+                if isinstance(obj, datetime):
+                    return obj.isoformat()
+                if isinstance(obj, UUID):
+                    return str(obj)
+                return obj
+
+            output = []
+            for r in records:
+                output.append({k: serialize(v) for k, v in r.items()})
+            console.print(json_module.dumps(output, indent=2, default=str))
+        else:
+            if not records:
+                console.print("No disposal records found")
+            else:
+                console.print(f"[bold]Disposal Records ({len(records)})[/bold]")
+                for r in records:
+                    console.print(f"\n  ID: {r['disposal_id']}")
+                    console.print(f"  Type: {r['disposal_type']}")
+                    console.print(f"  Target: {r['target_identifier']}")
+                    console.print(f"  Status: {r['execution_status']}")
+                    console.print(f"  Reason: {r['reason']}")
+                    if r.get("authorized_by_name"):
+                        console.print(f"  Authorized by: {r['authorized_by_name']}")
+                    if r.get("variants_disposed"):
+                        console.print(f"  Variants disposed: {r['variants_disposed']:,}")
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@data_app.command("check-retention")
+def data_check_retention(
+    days_ahead: int = typer.Option(
+        90, "--days", "-d", help="Days ahead to check for expiring data"
+    ),
+    db_url: Annotated[str | None, typer.Option("--db", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    json_output: bool = typer.Option(False, "--json", "-j", help="Output as JSON"),
+) -> None:
+    """Check for data past retention period or expiring soon.
+
+    Shows expired data and data approaching expiration based on retention policies.
+    """
+    import json as json_module
+
+    from .data import RetentionPolicy
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+    if not resolved_db_url:
+        console.print("[red]Error: Database connection required[/red]")
+        raise typer.Exit(1)
+
+    async def run_check():
+        pool = await asyncpg.create_pool(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            policy = RetentionPolicy(pool)
+            return await policy.generate_expiration_report(days_ahead)
+        finally:
+            await pool.close()
+
+    try:
+        report = asyncio.run(run_check())
+
+        if json_output:
+            output = {
+                "generated_at": report.generated_at.isoformat(),
+                "total_expired_variants": report.total_expired_variants,
+                "total_expiring_variants": report.total_expiring_variants,
+                "expired_batches": [
+                    {
+                        "batch_id": str(e.load_batch_id),
+                        "file": e.vcf_file_path,
+                        "expires_at": e.expires_at.isoformat(),
+                        "variant_count": e.variant_count,
+                    }
+                    for e in report.expired_batches
+                ],
+                "expiring_soon": [
+                    {
+                        "batch_id": str(e.load_batch_id),
+                        "file": e.vcf_file_path,
+                        "expires_at": e.expires_at.isoformat(),
+                        "variant_count": e.variant_count,
+                    }
+                    for e in report.expiring_soon
+                ],
+            }
+            console.print(json_module.dumps(output, indent=2))
+        else:
+            console.print("[bold]Retention Report[/bold]")
+            console.print(f"Generated: {report.generated_at.strftime('%Y-%m-%d %H:%M')}")
+            console.print()
+
+            if report.expired_batches:
+                console.print(f"[red]Expired Data ({len(report.expired_batches)} batches)[/red]")
+                console.print(f"  Total variants: {report.total_expired_variants:,}")
+                for e in report.expired_batches[:5]:
+                    console.print(f"  - {e.vcf_file_path}: {e.variant_count:,} variants")
+                if len(report.expired_batches) > 5:
+                    console.print(f"  ... and {len(report.expired_batches) - 5} more")
+            else:
+                console.print("[green]No expired data[/green]")
+
+            console.print()
+
+            if report.expiring_soon:
+                console.print(
+                    f"[yellow]Expiring Soon ({len(report.expiring_soon)} batches, "
+                    f"within {days_ahead} days)[/yellow]"
+                )
+                console.print(f"  Total variants: {report.total_expiring_variants:,}")
+                for e in report.expiring_soon[:5]:
+                    days_left = (e.expires_at - report.generated_at).days
+                    console.print(
+                        f"  - {e.vcf_file_path}: {e.variant_count:,} variants ({days_left} days)"
+                    )
+            else:
+                console.print(f"[green]No data expiring within {days_ahead} days[/green]")
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@data_app.command("cancel")
+def data_cancel(
+    disposal_id: Annotated[UUID, typer.Option("--disposal-id", "-i", help="Disposal UUID")],
+    user_id: Annotated[int, typer.Option("--user-id", "-u", help="Cancelling user ID")],
+    reason: Annotated[str, typer.Option("--reason", "-r", help="Cancellation reason")],
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Cancel a pending disposal request.
+
+    Only pending or authorized disposals can be cancelled.
+    Completed disposals cannot be cancelled.
+    """
+    from .data import DataDisposal
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+    if not resolved_db_url:
+        console.print("[red]Error: Database connection required[/red]")
+        raise typer.Exit(1)
+
+    async def run_cancel():
+        pool = await asyncpg.create_pool(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            disposal = DataDisposal(pool)
+            return await disposal.cancel_disposal(disposal_id, user_id, reason)
+        finally:
+            await pool.close()
+
+    try:
+        cancelled = asyncio.run(run_cancel())
+        if cancelled:
+            console.print(f"[green]✓[/green] Disposal {disposal_id} cancelled")
+        else:
+            console.print(
+                f"[yellow]Disposal {disposal_id} could not be cancelled "
+                "(may already be executed)[/yellow]"
+            )
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
 
 
 def main() -> None:

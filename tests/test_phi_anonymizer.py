@@ -60,18 +60,18 @@ class TestPHIEncryptor:
             encryptor = PHIEncryptor()
             assert not encryptor.is_available
 
-    def test_encrypt_without_library(self):
+    def test_encrypt_without_cipher(self):
         key = PHIEncryptor.generate_key()
         encryptor = PHIEncryptor(key=key)
-        encryptor._cipher_available = False
+        encryptor._aesgcm = None
 
         with pytest.raises(PHIEncryptionError, match="not available"):
             encryptor.encrypt("test")
 
-    def test_decrypt_without_library(self):
+    def test_decrypt_without_cipher(self):
         key = PHIEncryptor.generate_key()
         encryptor = PHIEncryptor(key=key)
-        encryptor._cipher_available = False
+        encryptor._aesgcm = None
 
         with pytest.raises(PHIEncryptionError, match="not available"):
             encryptor.decrypt(b"ciphertext", b"iv")

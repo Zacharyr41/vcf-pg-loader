@@ -10,7 +10,14 @@ secure linkage capability for authorized users.
 from .alerting import AlertAction, AlertConfig, AlertEvent, LoadContext, PHIAlertHandler
 from .anonymizer import SampleAnonymizer
 from .detector import PHIDetection, PHIDetector, PHIScanReport
-from .encryption import PHIEncryptor
+from .encryption import (
+    EncryptionStatus,
+    KeyManager,
+    KeyRotator,
+    KeySource,
+    PHIEncryptor,
+    check_encryption_status,
+)
 from .header_sanitizer import (
     PHIScanner,
     PHIScanResult,
@@ -26,6 +33,10 @@ __all__ = [
     "AlertAction",
     "AlertConfig",
     "AlertEvent",
+    "EncryptionStatus",
+    "KeyManager",
+    "KeyRotator",
+    "KeySource",
     "LoadContext",
     "PHIAlertHandler",
     "PHIDetection",
@@ -42,4 +53,5 @@ __all__ = [
     "SanitizedHeader",
     "VCFHeaderSanitizer",
     "PHIScanner",
+    "check_encryption_status",
 ]

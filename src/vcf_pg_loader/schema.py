@@ -3,6 +3,7 @@
 import asyncpg
 
 from .audit.schema import AuditSchemaManager
+from .data.schema import DisposalSchemaManager
 from .phi.schema import PHISchemaManager
 
 HUMAN_CHROMOSOMES = [
@@ -41,6 +42,7 @@ class SchemaManager:
         self.human_genome = human_genome
         self._audit_manager = AuditSchemaManager()
         self._phi_manager = PHISchemaManager()
+        self._disposal_manager = DisposalSchemaManager()
 
     async def create_schema(self, conn: asyncpg.Connection) -> None:
         """Create complete database schema."""
@@ -52,6 +54,7 @@ class SchemaManager:
         await self.create_samples_table(conn)
         await self.create_hipaa_audit_schema(conn)
         await self.create_phi_vault_schema(conn)
+        await self.create_disposal_schema(conn)
 
     async def drop_schema(self, conn: asyncpg.Connection) -> None:
         """Drop existing schema tables for clean recreation."""
@@ -329,3 +332,17 @@ class SchemaManager:
     async def get_phi_stats(self, conn: asyncpg.Connection) -> dict:
         """Get PHI vault statistics."""
         return await self._phi_manager.get_mapping_stats(conn)
+
+    async def create_disposal_schema(self, conn: asyncpg.Connection) -> None:
+        """Create disposal tracking schema.
+
+        Creates tables for:
+        - Disposal records with authorization tracking
+        - Retention policies
+        - Verification and certificate generation
+        """
+        await self._disposal_manager.create_disposal_schema(conn)
+
+    async def verify_disposal_schema(self, conn: asyncpg.Connection) -> bool:
+        """Verify disposal schema exists."""
+        return await self._disposal_manager.verify_schema_exists(conn)
