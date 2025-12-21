@@ -13,11 +13,15 @@ logger = logging.getLogger(__name__)
 
 class AuthSchemaManager:
     async def create_auth_schema(self, conn: asyncpg.Connection) -> None:
-        sql_path = files("vcf_pg_loader.db.schema").joinpath("users_tables.sql")
-        sql = sql_path.read_text()
-
-        await conn.execute(sql)
+        users_sql_path = files("vcf_pg_loader.db.schema").joinpath("users_tables.sql")
+        users_sql = users_sql_path.read_text()
+        await conn.execute(users_sql)
         logger.info("Auth schema created/updated")
+
+        rbac_sql_path = files("vcf_pg_loader.db.schema").joinpath("rbac_tables.sql")
+        rbac_sql = rbac_sql_path.read_text()
+        await conn.execute(rbac_sql)
+        logger.info("RBAC schema created/updated")
 
     async def schema_exists(self, conn: asyncpg.Connection) -> bool:
         result = await conn.fetchval(

@@ -125,3 +125,69 @@ class TokenPayload:
     exp: int
     iat: int
     issued_at: datetime = field(default_factory=datetime.now)
+
+
+@dataclass
+class Role:
+    role_id: int
+    role_name: str
+    description: str | None = None
+    is_system_role: bool = False
+    created_at: datetime | None = None
+
+    @classmethod
+    def from_db_row(cls, row: dict) -> "Role":
+        return cls(
+            role_id=row["role_id"],
+            role_name=row["role_name"],
+            description=row.get("description"),
+            is_system_role=row.get("is_system_role", False),
+            created_at=row.get("created_at"),
+        )
+
+
+@dataclass
+class Permission:
+    permission_id: int
+    permission_name: str
+    resource_type: str
+    action: str
+    description: str | None = None
+
+    @classmethod
+    def from_db_row(cls, row: dict) -> "Permission":
+        return cls(
+            permission_id=row["permission_id"],
+            permission_name=row["permission_name"],
+            resource_type=row["resource_type"],
+            action=row["action"],
+            description=row.get("description"),
+        )
+
+
+@dataclass
+class UserRole:
+    user_id: int
+    role_id: int
+    role_name: str
+    granted_by: int | None = None
+    granted_at: datetime | None = None
+    expires_at: datetime | None = None
+
+    @classmethod
+    def from_db_row(cls, row: dict) -> "UserRole":
+        return cls(
+            user_id=row["user_id"],
+            role_id=row["role_id"],
+            role_name=row["role_name"],
+            granted_by=row.get("granted_by"),
+            granted_at=row.get("granted_at"),
+            expires_at=row.get("expires_at"),
+        )
+
+    def is_expired(self) -> bool:
+        if self.expires_at is None:
+            return False
+        from datetime import UTC
+
+        return datetime.now(UTC) > self.expires_at
