@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+from datetime import date as date_type
 from pathlib import Path
 from typing import Annotated
 from uuid import UUID
@@ -1110,6 +1111,288 @@ def doctor() -> None:
         console.print("[yellow]Some dependencies are missing.[/yellow]")
         console.print("\nNote: Parsing and benchmarks work without Docker.")
         console.print("      Database features require Docker or external PostgreSQL.")
+
+
+audit_app = typer.Typer(help="HIPAA audit log management and verification")
+app.add_typer(audit_app, name="audit")
+
+
+@audit_app.command("verify")
+def audit_verify(
+    start_date: Annotated[str, typer.Option("--start-date", "-s", help="Start date (YYYY-MM-DD)")],
+    end_date: Annotated[str, typer.Option("--end-date", "-e", help="End date (YYYY-MM-DD)")],
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Verify audit log integrity for a date range.
+
+    Checks hash chain integrity to detect any tampering with audit records.
+    Returns non-zero exit code if tampering is detected.
+
+    Example:
+        vcf-pg-loader audit verify --start-date 2024-01-01 --end-date 2024-12-31
+    """
+    import json
+
+    from .audit import AuditIntegrity
+
+    try:
+        start = date_type.fromisoformat(start_date)
+        end = date_type.fromisoformat(end_date)
+    except ValueError as e:
+        console.print(f"[red]Error: Invalid date format: {e}[/red]")
+        raise typer.Exit(1) from None
+
+    if start > end:
+        console.print("[red]Error: start-date must be before end-date[/red]")
+        raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_verify():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            integrity = AuditIntegrity()
+            report = await integrity.verify_chain_integrity(conn, start, end)
+            return report
+        finally:
+            await conn.close()
+
+    try:
+        report = asyncio.run(run_verify())
+
+        if json_output:
+            console.print(json.dumps(report.to_dict(), indent=2))
+        else:
+            if not quiet:
+                console.print("\n[bold]Audit Integrity Report[/bold]")
+                console.print(f"  Date Range: {report.start_date} to {report.end_date}")
+                console.print(f"  Total Entries: {report.total_entries:,}")
+                console.print(f"  Verified: {report.verified_entries:,}")
+                console.print(f"  Coverage: {report.coverage_percent:.1f}%")
+                console.print()
+
+            if report.is_valid:
+                console.print("[green]✓ Audit log integrity verified[/green]")
+            else:
+                console.print(
+                    f"[red]✗ {len(report.violations)} integrity violations detected[/red]"
+                )
+                for v in report.violations[:10]:
+                    console.print(f"  - Audit ID {v.audit_id}: {v.status.value} - {v.message}")
+                if len(report.violations) > 10:
+                    console.print(f"  ... and {len(report.violations) - 10} more")
+                raise typer.Exit(1)
+
+    except Exception as e:
+        if not isinstance(e, SystemExit):
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from None
+        raise
+
+
+@audit_app.command("export")
+def audit_export(
+    output: Annotated[Path, typer.Option("--output", "-o", help="Output file path")],
+    start_date: Annotated[str, typer.Option("--start-date", "-s", help="Start date (YYYY-MM-DD)")],
+    end_date: Annotated[str, typer.Option("--end-date", "-e", help="End date (YYYY-MM-DD)")],
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Export audit logs with integrity metadata for backup.
+
+    Exports audit entries with checksums for later verification.
+
+    Example:
+        vcf-pg-loader audit export -o backup.json --start-date 2024-01-01 --end-date 2024-12-31
+    """
+    import json
+
+    from .audit import AuditIntegrity
+
+    try:
+        start = date_type.fromisoformat(start_date)
+        end = date_type.fromisoformat(end_date)
+    except ValueError as e:
+        console.print(f"[red]Error: Invalid date format: {e}[/red]")
+        raise typer.Exit(1) from None
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_export():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            integrity = AuditIntegrity()
+            entries, metadata = await integrity.export_with_integrity(conn, start, end)
+            return entries, metadata
+        finally:
+            await conn.close()
+
+    try:
+        entries, metadata = asyncio.run(run_export())
+
+        export_data = {
+            "metadata": {
+                "export_time": metadata.export_time.isoformat(),
+                "start_date": metadata.start_date.isoformat(),
+                "end_date": metadata.end_date.isoformat(),
+                "entry_count": metadata.entry_count,
+                "first_hash": metadata.first_hash,
+                "last_hash": metadata.last_hash,
+                "checksum": metadata.checksum,
+            },
+            "entries": entries,
+        }
+
+        with open(output, "w") as f:
+            json.dump(export_data, f, indent=2)
+
+        if not quiet:
+            console.print(
+                f"[green]✓[/green] Exported {metadata.entry_count:,} audit entries to {output}"
+            )
+            console.print(f"  Checksum: {metadata.checksum[:16]}...")
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@audit_app.command("verify-backup")
+def audit_verify_backup(
+    backup_file: Annotated[Path, typer.Argument(help="Backup file to verify")],
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Verify integrity of an exported audit backup.
+
+    Checks that the backup file matches its embedded checksums.
+
+    Example:
+        vcf-pg-loader audit verify-backup backup.json
+    """
+    import json
+
+    from .audit import AuditIntegrity, BackupMetadata
+
+    if not backup_file.exists():
+        console.print(f"[red]Error: File not found: {backup_file}[/red]")
+        raise typer.Exit(1)
+
+    try:
+        with open(backup_file) as f:
+            data = json.load(f)
+
+        meta = data["metadata"]
+        metadata = BackupMetadata(
+            export_time=date_type.fromisoformat(meta["export_time"][:10]),
+            start_date=date_type.fromisoformat(meta["start_date"]),
+            end_date=date_type.fromisoformat(meta["end_date"]),
+            entry_count=meta["entry_count"],
+            first_hash=meta["first_hash"],
+            last_hash=meta["last_hash"],
+            checksum=meta["checksum"],
+        )
+
+        integrity = AuditIntegrity()
+        is_valid, message = integrity.verify_backup(data["entries"], metadata)
+
+        if is_valid:
+            console.print(f"[green]✓[/green] {message}")
+            if not quiet:
+                console.print(f"  Entries: {metadata.entry_count:,}")
+                console.print(f"  Date Range: {metadata.start_date} to {metadata.end_date}")
+        else:
+            console.print(f"[red]✗ Backup verification failed: {message}[/red]")
+            raise typer.Exit(1)
+
+    except json.JSONDecodeError as e:
+        console.print(f"[red]Error: Invalid JSON in backup file: {e}[/red]")
+        raise typer.Exit(1) from None
+    except KeyError as e:
+        console.print(f"[red]Error: Missing required field in backup: {e}[/red]")
+        raise typer.Exit(1) from None
+    except Exception as e:
+        if not isinstance(e, SystemExit):
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from None
+        raise
+
+
+@audit_app.command("stats")
+def audit_stats(
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Show audit log statistics."""
+    import json
+
+    from .audit import AuditSchemaManager
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_stats():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            schema_manager = AuditSchemaManager()
+            stats = await schema_manager.get_audit_stats(conn)
+            partitions = await schema_manager.get_partition_info(conn)
+            immutable = await schema_manager.verify_immutability(conn)
+            return stats, partitions, immutable
+        finally:
+            await conn.close()
+
+    try:
+        stats, partitions, immutable = asyncio.run(run_stats())
+
+        if json_output:
+            output = {
+                "stats": stats,
+                "partitions": partitions,
+                "immutability_trigger_active": immutable,
+            }
+            for key in output["stats"]:
+                if hasattr(output["stats"][key], "isoformat"):
+                    output["stats"][key] = output["stats"][key].isoformat()
+            console.print(json.dumps(output, indent=2, default=str))
+        else:
+            console.print("[bold]Audit Log Statistics[/bold]")
+            console.print(f"  Total Events: {stats.get('total_events', 0):,}")
+            console.print(f"  Unique Users: {stats.get('unique_users', 0):,}")
+            console.print(f"  Failed Auth: {stats.get('failed_auth_count', 0):,}")
+            console.print(f"  PHI Access: {stats.get('phi_access_count', 0):,}")
+            if stats.get("oldest_event"):
+                console.print(f"  Oldest Event: {stats['oldest_event']}")
+            if stats.get("newest_event"):
+                console.print(f"  Newest Event: {stats['newest_event']}")
+            console.print(f"  Partitions: {len(partitions)}")
+            if immutable:
+                console.print("[green]  ✓ Immutability trigger active[/green]")
+            else:
+                console.print("[red]  ✗ Immutability trigger NOT active[/red]")
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
 
 
 def main() -> None:

@@ -13,6 +13,7 @@ from typing import ParamSpec, TypeVar
 import asyncpg
 
 from .context import get_audit_context
+from .integrity import AuditIntegrity
 from .models import AuditEvent, AuditEventType
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,8 @@ class AuditLogger:
         self._lock = asyncio.Lock()
         self._flush_task: asyncio.Task | None = None
         self._running = False
+        self._integrity = AuditIntegrity()
+        self._last_hash: str | None = None
 
     async def start(self) -> None:
         """Start the background flush task."""
@@ -132,26 +135,32 @@ class AuditLogger:
             await self._write_to_fallback(events)
 
     async def _write_to_db(self, events: list[AuditEvent]) -> None:
-        """Write events to the hipaa_audit_log table."""
+        """Write events to the hipaa_audit_log table with hash chain."""
         if self._pool is None:
             raise RuntimeError("No database pool configured")
 
         async with self._pool.acquire() as conn:
+            if self._last_hash is None:
+                self._last_hash = await self._integrity.get_last_hash(conn)
+
             for event in events:
                 row = event.to_db_row()
-                await conn.execute(
+
+                result = await conn.fetchrow(
                     """
                     INSERT INTO hipaa_audit_log (
                         event_type, user_id, user_name, session_id,
                         action, resource_type, resource_id,
                         client_ip, client_hostname, application_name,
-                        success, error_message, details
+                        success, error_message, details,
+                        previous_hash
                     ) VALUES (
                         $1::audit_event_type, $2, $3, $4,
                         $5, $6, $7,
                         $8::inet, $9, $10,
-                        $11, $12, $13::jsonb
-                    )
+                        $11, $12, $13::jsonb,
+                        $14
+                    ) RETURNING entry_hash
                     """,
                     row["event_type"],
                     row["user_id"],
@@ -166,7 +175,10 @@ class AuditLogger:
                     row["success"],
                     row["error_message"],
                     json.dumps(row["details"]),
+                    self._last_hash,
                 )
+
+                self._last_hash = result["entry_hash"]
 
     async def _write_to_fallback(self, events: list[AuditEvent]) -> None:
         """Write events to fallback JSONL file."""
