@@ -4319,6 +4319,247 @@ def data_cancel(
         raise typer.Exit(1) from None
 
 
+compliance_app = typer.Typer(help="HIPAA compliance validation and reporting")
+app.add_typer(compliance_app, name="compliance")
+
+
+@compliance_app.command("check")
+def compliance_check(
+    check_id: Annotated[str | None, typer.Option("--id", "-i", help="Specific check ID")] = None,
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    json_output: bool = typer.Option(False, "--json", "-j", help="Output as JSON"),
+) -> None:
+    """Run HIPAA compliance checks.
+
+    Validates database configuration against HIPAA Security Rule requirements.
+    Returns non-zero exit code if critical or high severity checks fail.
+
+    \b
+    Examples:
+        vcf-pg-loader compliance check
+        vcf-pg-loader compliance check --id TLS_ENABLED
+        vcf-pg-loader compliance check --json
+    """
+    import json as json_module
+
+    from .compliance import ComplianceValidator, ReportExporter, ReportFormat
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+    if not resolved_db_url:
+        console.print("[red]Error: Database connection required[/red]")
+        raise typer.Exit(1)
+
+    async def run_check():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            validator = ComplianceValidator(conn)
+            if check_id:
+                result = await validator.run_check(check_id)
+                return result, None
+            else:
+                report = await validator.run_all_checks()
+                return None, report
+        finally:
+            await conn.close()
+
+    try:
+        result, report = asyncio.run(run_check())
+        exporter = ReportExporter()
+
+        if result:
+            if json_output:
+                console.print(json_module.dumps(result.to_dict(), indent=2))
+            else:
+                status_symbol = "✓" if result.status.value == "pass" else "✗"
+                status_color = "green" if result.status.value == "pass" else "red"
+                console.print(
+                    f"[{status_color}]{status_symbol}[/{status_color}] "
+                    f"{result.check.name}: {result.message}"
+                )
+                if result.remediation:
+                    console.print(f"  Remediation: {result.remediation}")
+
+            if result.status.value == "fail" and result.check.severity.value in (
+                "critical",
+                "high",
+            ):
+                raise typer.Exit(1)
+        else:
+            if json_output:
+                console.print(exporter.export(report, ReportFormat.JSON))
+            else:
+                console.print("\n[bold]HIPAA Compliance Check Results[/bold]\n")
+                for r in report.results:
+                    if r.status.value == "pass":
+                        symbol, color = "✓", "green"
+                    elif r.status.value == "fail":
+                        symbol, color = "✗", "red"
+                    elif r.status.value == "warn":
+                        symbol, color = "!", "yellow"
+                    else:
+                        symbol, color = "-", "dim"
+
+                    console.print(f"[{color}]{symbol}[/{color}] {r.check.name}: {r.message}")
+                    if r.remediation and r.status.value != "pass":
+                        console.print(f"    [dim]→ {r.remediation}[/dim]")
+
+                console.print()
+                console.print(
+                    f"Summary: {report.passed_count} passed, {report.failed_count} failed, "
+                    f"{report.warned_count} warnings"
+                )
+
+                if report.is_compliant:
+                    console.print("[green]✓ System is HIPAA compliant[/green]")
+                else:
+                    console.print("[red]✗ System is NOT HIPAA compliant[/red]")
+
+            exit_code = exporter.get_exit_code(report)
+            if exit_code != 0:
+                raise typer.Exit(exit_code)
+
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    except Exception as e:
+        if not isinstance(e, SystemExit):
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from None
+        raise
+
+
+@compliance_app.command("report")
+def compliance_report(
+    format: Annotated[
+        str, typer.Option("--format", "-f", help="Output format (json, html)")
+    ] = "json",
+    output: Annotated[Path, typer.Option("--output", "-o", help="Output file path")] = None,
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Generate a HIPAA compliance report.
+
+    Creates a detailed report of all compliance checks for documentation.
+
+    \b
+    Examples:
+        vcf-pg-loader compliance report --format json --output report.json
+        vcf-pg-loader compliance report --format html --output report.html
+    """
+    from .compliance import ComplianceValidator, ReportExporter, ReportFormat
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+    if not resolved_db_url:
+        console.print("[red]Error: Database connection required[/red]")
+        raise typer.Exit(1)
+
+    format_map = {
+        "json": ReportFormat.JSON,
+        "html": ReportFormat.HTML,
+        "text": ReportFormat.TEXT,
+    }
+
+    if format.lower() not in format_map:
+        console.print(f"[red]Error: Unknown format '{format}'. Use: json, html, text[/red]")
+        raise typer.Exit(1)
+
+    async def run_report():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            validator = ComplianceValidator(conn)
+            return await validator.run_all_checks()
+        finally:
+            await conn.close()
+
+    try:
+        report = asyncio.run(run_report())
+        exporter = ReportExporter()
+        report_format = format_map[format.lower()]
+        content = exporter.export(report, report_format)
+
+        if output:
+            output.write_text(content)
+            if not quiet:
+                console.print(f"[green]✓[/green] Report written to {output}")
+        else:
+            console.print(content)
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@compliance_app.command("status")
+def compliance_status(
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    json_output: bool = typer.Option(False, "--json", "-j", help="Output as JSON"),
+) -> None:
+    """Quick compliance status summary.
+
+    Shows a brief overview of compliance status without detailed check output.
+    """
+    import json as json_module
+
+    from .compliance import ComplianceValidator
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+    if not resolved_db_url:
+        console.print("[red]Error: Database connection required[/red]")
+        raise typer.Exit(1)
+
+    async def run_status():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            validator = ComplianceValidator(conn)
+            return await validator.run_all_checks()
+        finally:
+            await conn.close()
+
+    try:
+        report = asyncio.run(run_status())
+
+        if json_output:
+            output = {
+                "is_compliant": report.is_compliant,
+                "passed": report.passed_count,
+                "failed": report.failed_count,
+                "warned": report.warned_count,
+                "skipped": report.skipped_count,
+                "timestamp": report.timestamp.isoformat(),
+            }
+            console.print(json_module.dumps(output, indent=2))
+        else:
+            status = (
+                "[green]COMPLIANT[/green]" if report.is_compliant else "[red]NON-COMPLIANT[/red]"
+            )
+            console.print(f"Status: {status}")
+            console.print(
+                f"Checks: {report.passed_count} passed, {report.failed_count} failed, "
+                f"{report.warned_count} warnings"
+            )
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
 def main() -> None:
     """Entry point for the CLI."""
     app()
