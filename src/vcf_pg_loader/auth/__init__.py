@@ -2,10 +2,13 @@
 
 HIPAA Reference: 164.312(d) - Person or Entity Authentication
 HIPAA Reference: 164.312(a)(1) - Access Controls
+HIPAA Reference: 164.312(a)(2)(ii) - Emergency Access Procedure
 HIPAA Reference: 164.312(a)(2)(iii) - Automatic logoff
 """
 
 from .authentication import Authenticator
+from .emergency_access import EmergencyAccessManager, EmergencyToken, EmergencyType
+from .mfa import MFAEnrollment, MFAManager, MFAStatus
 from .models import (
     AuthResult,
     AuthStatus,
@@ -28,6 +31,12 @@ __all__ = [
     "AuthResult",
     "AuthSchemaManager",
     "AuthStatus",
+    "EmergencyAccessManager",
+    "EmergencyToken",
+    "EmergencyType",
+    "MFAEnrollment",
+    "MFAManager",
+    "MFAStatus",
     "PasswordPolicy",
     "Permission",
     "PermissionChecker",

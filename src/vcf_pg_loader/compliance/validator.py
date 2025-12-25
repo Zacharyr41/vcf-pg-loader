@@ -1,4 +1,9 @@
-"""HIPAA compliance validator for vcf-pg-loader."""
+"""HIPAA compliance validator for vcf-pg-loader.
+
+This module implements compliance checks for HIPAA Security Rule
+technical safeguards (45 CFR 164.312) and documentation requirements
+(45 CFR 164.316).
+"""
 
 import asyncpg
 
@@ -38,6 +43,9 @@ class ComplianceValidator:
             "PASSWORD_POLICY": self.check_password_policy,
             "PHI_DETECTION": self.check_phi_detection,
             "SECURE_DISPOSAL": self.check_secure_disposal,
+            "EMERGENCY_ACCESS": self.check_emergency_access,
+            "MFA_ENABLED": self.check_mfa,
+            "AUDIT_RETENTION": self.check_audit_retention,
         }
 
         method = check_methods.get(check_id)
@@ -228,19 +236,32 @@ class ComplianceValidator:
             """
         )
 
-        if encryption_configured:
+        if not encryption_configured:
             return CheckResult(
                 check=check,
-                status=ComplianceStatus.PASS,
-                message="Encryption at rest is configured",
+                status=ComplianceStatus.FAIL,
+                message="Encryption at rest not configured (NIST SP 800-111)",
+                remediation="Run 'vcf-pg-loader security init' to configure AES-256 encryption",
             )
-        else:
+
+        # 45 CFR 164.312(a)(2)(iv): Verify keys exist and are valid
+        key_count = await self.conn.fetchval(
+            "SELECT COUNT(*) FROM encryption_keys WHERE is_active = true"
+        )
+
+        if key_count == 0:
             return CheckResult(
                 check=check,
-                status=ComplianceStatus.WARN,
-                message="Encryption at rest not configured",
-                remediation="Run 'vcf-pg-loader security init' to configure encryption",
+                status=ComplianceStatus.FAIL,
+                message="No active encryption keys configured",
+                remediation="Generate encryption keys with 'vcf-pg-loader security generate-key'",
             )
+
+        return CheckResult(
+            check=check,
+            status=ComplianceStatus.PASS,
+            message=f"Encryption at rest configured with {key_count} active key(s)",
+        )
 
     async def check_session_timeout(self) -> CheckResult:
         check = get_check_by_id("SESSION_TIMEOUT")
@@ -407,3 +428,213 @@ class ComplianceValidator:
                 message="Secure disposal not configured",
                 remediation="Run 'vcf-pg-loader data disposal-init' to configure secure disposal",
             )
+
+    async def check_emergency_access(self) -> CheckResult:
+        """Check emergency access procedure implementation.
+
+        HIPAA Citation: 45 CFR 164.312(a)(2)(ii) - REQUIRED
+        "Establish (and implement as needed) procedures for obtaining
+        necessary electronic protected health information during an emergency."
+        """
+        check = get_check_by_id("EMERGENCY_ACCESS")
+
+        table_exists = await self.conn.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.tables
+                WHERE table_name = 'emergency_access_tokens'
+            )
+            """
+        )
+
+        if not table_exists:
+            return CheckResult(
+                check=check,
+                status=ComplianceStatus.FAIL,
+                message="Emergency access procedure not implemented",
+                remediation="Run 'vcf-pg-loader emergency init' to configure break-glass access",
+            )
+
+        procedure_exists = await self.conn.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM pg_proc
+                WHERE proname = 'grant_emergency_access'
+            )
+            """
+        )
+
+        if not procedure_exists:
+            return CheckResult(
+                check=check,
+                status=ComplianceStatus.FAIL,
+                message="Emergency access grant procedure not found",
+                remediation="Run 'vcf-pg-loader emergency init' to create emergency access procedures",
+            )
+
+        return CheckResult(
+            check=check,
+            status=ComplianceStatus.PASS,
+            message="Emergency access (break-glass) procedure is configured",
+        )
+
+    async def check_mfa(self) -> CheckResult:
+        """Check multi-factor authentication implementation.
+
+        HIPAA Citation: 45 CFR 164.312(d) - REQUIRED standard
+        "Implement procedures to verify that a person or entity seeking access
+        to electronic protected health information is the one claimed."
+
+        HHS Security Series Paper #4 defines MFA as using 2+ factors:
+        - Something known (password, PIN)
+        - Something possessed (token, smart card)
+        - Something unique (biometric)
+        """
+        check = get_check_by_id("MFA_ENABLED")
+
+        users_table_exists = await self.conn.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'users' AND column_name = 'mfa_enabled'
+            )
+            """
+        )
+
+        if not users_table_exists:
+            return CheckResult(
+                check=check,
+                status=ComplianceStatus.FAIL,
+                message="MFA support not configured in user schema",
+                remediation="Run 'vcf-pg-loader auth init' to update authentication schema",
+            )
+
+        mfa_stats = await self.conn.fetchrow(
+            """
+            SELECT
+                COUNT(*) as total_users,
+                COUNT(*) FILTER (WHERE mfa_enabled = true) as mfa_users
+            FROM users
+            WHERE is_active = true
+            """
+        )
+
+        if mfa_stats is None or mfa_stats["total_users"] == 0:
+            return CheckResult(
+                check=check,
+                status=ComplianceStatus.WARN,
+                message="No active users to evaluate MFA status",
+            )
+
+        total = mfa_stats["total_users"]
+        mfa_count = mfa_stats["mfa_users"]
+        mfa_pct = (mfa_count / total) * 100 if total > 0 else 0
+
+        if mfa_count == 0:
+            return CheckResult(
+                check=check,
+                status=ComplianceStatus.FAIL,
+                message="No users have MFA enabled",
+                remediation="Enable MFA for all users with 'vcf-pg-loader auth enable-mfa'",
+            )
+
+        if mfa_pct < 100:
+            return CheckResult(
+                check=check,
+                status=ComplianceStatus.WARN,
+                message=f"MFA enabled for {mfa_count}/{total} users ({mfa_pct:.0f}%)",
+                remediation="Enable MFA for all users to meet HIPAA authentication requirements",
+            )
+
+        return CheckResult(
+            check=check,
+            status=ComplianceStatus.PASS,
+            message=f"MFA enabled for all {total} active users",
+        )
+
+    async def check_audit_retention(self) -> CheckResult:
+        """Check 6-year audit log retention policy.
+
+        HIPAA Citation: 45 CFR 164.316(b)(2)(i) - REQUIRED
+        "Retain the documentation required by paragraph (b)(1) of this section
+        for 6 years from the date of its creation or the date when it last
+        was in effect, whichever is later."
+
+        This applies to: audit logs, security policies, risk assessments,
+        incident records.
+        """
+        check = get_check_by_id("AUDIT_RETENTION")
+
+        audit_table_exists = await self.conn.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.tables
+                WHERE table_name = 'hipaa_audit_log'
+            )
+            """
+        )
+
+        if not audit_table_exists:
+            return CheckResult(
+                check=check,
+                status=ComplianceStatus.FAIL,
+                message="Audit log table does not exist",
+                remediation="Run 'vcf-pg-loader audit init' to create audit logging schema",
+            )
+
+        retention_policy_exists = await self.conn.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.tables
+                WHERE table_name = 'audit_retention_policy'
+            )
+            """
+        )
+
+        if not retention_policy_exists:
+            return CheckResult(
+                check=check,
+                status=ComplianceStatus.FAIL,
+                message="Audit retention policy not configured",
+                remediation="Run 'vcf-pg-loader audit retention-init' to configure 6-year retention",
+            )
+
+        policy = await self.conn.fetchrow(
+            """
+            SELECT retention_years, enforce_minimum, created_at
+            FROM audit_retention_policy
+            WHERE is_active = true
+            ORDER BY created_at DESC
+            LIMIT 1
+            """
+        )
+
+        if policy is None:
+            return CheckResult(
+                check=check,
+                status=ComplianceStatus.FAIL,
+                message="No active audit retention policy",
+                remediation="Configure active retention policy with minimum 6-year retention",
+            )
+
+        if policy["retention_years"] < 6:
+            return CheckResult(
+                check=check,
+                status=ComplianceStatus.FAIL,
+                message=f"Retention period {policy['retention_years']} years is below HIPAA minimum (6 years)",
+                remediation="Update retention policy to minimum 6 years per 45 CFR 164.316(b)(2)(i)",
+            )
+
+        if not policy["enforce_minimum"]:
+            return CheckResult(
+                check=check,
+                status=ComplianceStatus.WARN,
+                message=f"Retention policy set to {policy['retention_years']} years but not enforced",
+                remediation="Enable retention enforcement to prevent premature log deletion",
+            )
+
+        return CheckResult(
+            check=check,
+            status=ComplianceStatus.PASS,
+            message=f"Audit retention policy enforced at {policy['retention_years']} years",
+        )
