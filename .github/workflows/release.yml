@@ -28,9 +28,14 @@ on:
         type: boolean
         default: false
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   validate-version:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Validate semver format
         run: |
@@ -47,6 +52,7 @@ jobs:
   bump-and-tag:
     needs: validate-version
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
@@ -94,6 +100,7 @@ jobs:
     needs: bump-and-tag
     if: ${{ !inputs.skip_nfcore }}
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
@@ -143,9 +150,12 @@ jobs:
     needs: bump-and-tag
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: write
+    outputs:
+      docker_tags: ${{ steps.meta.outputs.tags }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -184,6 +194,7 @@ jobs:
   build:
     needs: bump-and-tag
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -215,9 +226,12 @@ jobs:
     needs: build
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     environment: pypi
     permissions:
       id-token: write
+    outputs:
+      pypi_url: ${{ steps.set-url.outputs.pypi_url }}
     steps:
       - name: Download dist artifacts
         uses: actions/download-artifact@v4
@@ -238,9 +252,14 @@ jobs:
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
 
+      - name: Set PyPI URL output
+        id: set-url
+        run: echo "pypi_url=https://pypi.org/project/vcf-pg-loader/${{ inputs.version }}/" >> "$GITHUB_OUTPUT"
+
   create-github-release:
     needs: publish-pypi
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
@@ -263,6 +282,7 @@ jobs:
   wait-for-pypi:
     needs: publish-pypi
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       sha256: ${{ steps.poll.outputs.sha256 }}
     steps:
@@ -292,6 +312,7 @@ jobs:
     needs: wait-for-pypi
     if: ${{ !inputs.skip_bioconda }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     continue-on-error: true
     outputs:
       pr_url: ${{ steps.create-pr.outputs.pull-request-url }}
@@ -347,6 +368,7 @@ jobs:
     needs: bioconda-pr
     if: always() && !inputs.skip_bioconda
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: write
       issues: write
@@ -424,6 +446,7 @@ jobs:
     needs: [bioconda-pr, build-and-push-docker]
     if: ${{ !inputs.skip_nfcore && inputs.create_nfcore_pr && !inputs.dry_run }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     continue-on-error: true
     outputs:
       pr_url: ${{ steps.create-pr.outputs.pull-request-url }}
@@ -504,3 +527,138 @@ jobs:
           echo "## nf-core Modules PR Created" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "PR: ${{ steps.create-pr.outputs.pull-request-url }}" >> $GITHUB_STEP_SUMMARY
+
+  # =============================================================================
+  # RELEASE SUMMARY
+  # Updates the GitHub release with status of all jobs and links to artifacts.
+  # =============================================================================
+  release-summary:
+    needs: [validate-version, bump-and-tag, verify-nfcore-module-versions, build-and-push-docker, build, publish-pypi, create-github-release, wait-for-pypi, bioconda-pr, notify-bioconda-status, nfcore-modules-pr]
+    if: always() && !inputs.dry_run
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Update release with summary
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const version = '${{ inputs.version }}';
+            const runUrl = `https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}`;
+
+            const jobStatus = (result) => result === 'success' ? '✅' : (result === 'skipped' ? '⏭️' : '❌');
+
+            const summary = `## Release Summary
+
+            | Step | Status |
+            |------|--------|
+            | Version Validation | ${jobStatus('${{ needs.validate-version.result }}')} |
+            | Version Bump & Tag | ${jobStatus('${{ needs.bump-and-tag.result }}')} |
+            | nf-core Module Verification | ${jobStatus('${{ needs.verify-nfcore-module-versions.result }}')} |
+            | Docker Build & Push | ${jobStatus('${{ needs.build-and-push-docker.result }}')} |
+            | Python Package Build | ${jobStatus('${{ needs.build.result }}')} |
+            | PyPI Publish | ${jobStatus('${{ needs.publish-pypi.result }}')} |
+            | GitHub Release | ${jobStatus('${{ needs.create-github-release.result }}')} |
+            | BioConda PR | ${jobStatus('${{ needs.bioconda-pr.result }}')} |
+            | nf-core Modules PR | ${jobStatus('${{ needs.nfcore-modules-pr.result }}')} |
+
+            ### Artifacts
+            - **PyPI**: https://pypi.org/project/vcf-pg-loader/${version}/
+            - **Docker**: \`ghcr.io/zacharyr41/vcf-pg-loader:${version}\`
+            - **BioConda PR**: ${{ needs.bioconda-pr.outputs.pr_url || 'N/A' }}
+            - **nf-core PR**: ${{ needs.nfcore-modules-pr.outputs.pr_url || 'N/A' }}
+
+            ---
+            📋 [Workflow Run](${runUrl})`;
+
+            const releases = await github.rest.repos.listReleases({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 5
+            });
+
+            const release = releases.data.find(r => r.tag_name === `v${version}`);
+            if (release) {
+              await github.rest.repos.updateRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: release.id,
+                body: release.body + '\n\n' + summary
+              });
+              console.log('Updated release notes with summary');
+            } else {
+              console.log('Release not found, skipping summary update');
+            }
+
+  # =============================================================================
+  # FAILURE NOTIFICATION
+  # Creates a GitHub issue if any critical job failed.
+  # =============================================================================
+  notify-failures:
+    needs: [validate-version, bump-and-tag, build-and-push-docker, build, publish-pypi, create-github-release, wait-for-pypi, bioconda-pr, nfcore-modules-pr]
+    if: failure() && !inputs.dry_run
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Create failure issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const version = '${{ inputs.version }}';
+            const runUrl = `https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}`;
+
+            const jobs = [
+              { name: 'Version Validation', result: '${{ needs.validate-version.result }}' },
+              { name: 'Version Bump & Tag', result: '${{ needs.bump-and-tag.result }}' },
+              { name: 'Docker Build & Push', result: '${{ needs.build-and-push-docker.result }}' },
+              { name: 'Python Package Build', result: '${{ needs.build.result }}' },
+              { name: 'PyPI Publish', result: '${{ needs.publish-pypi.result }}' },
+              { name: 'GitHub Release', result: '${{ needs.create-github-release.result }}' },
+              { name: 'Wait for PyPI', result: '${{ needs.wait-for-pypi.result }}' },
+              { name: 'BioConda PR', result: '${{ needs.bioconda-pr.result }}' },
+              { name: 'nf-core Modules PR', result: '${{ needs.nfcore-modules-pr.result }}' }
+            ];
+
+            const failed = jobs.filter(j => j.result === 'failure');
+            const skipped = jobs.filter(j => j.result === 'skipped');
+
+            let body = `## Release v${version} Partially Failed
+
+            The release workflow encountered failures. Manual intervention may be required.
+
+            ### Failed Jobs
+            ${failed.map(j => `- ❌ ${j.name}`).join('\n')}
+
+            ### Skipped Jobs
+            ${skipped.length > 0 ? skipped.map(j => `- ⏭️ ${j.name}`).join('\n') : 'None'}
+
+            ### Manual Steps
+
+            Depending on which jobs failed, you may need to:
+
+            1. **Version Bump Failed**: Manually run \`bump-my-version bump --new-version ${version}\` and push
+            2. **Docker Push Failed**: Manually build and push the Docker image
+            3. **PyPI Publish Failed**: Manually publish with \`python -m build && twine upload dist/*\`
+            4. **GitHub Release Failed**: Manually create the release from the tag
+            5. **BioConda PR Failed**: See [BioConda contributing guide](https://bioconda.github.io/contributor/index.html)
+            6. **nf-core PR Failed**: Manually create PR to nf-core/modules
+
+            ### Debug Information
+
+            - **Workflow Run**: ${runUrl}
+            - **Tag**: v${version}
+            - **Triggered by**: @${{ github.actor }}
+
+            ---
+            🤖 This issue was automatically created by the release workflow.`;
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Release v${version} partially failed`,
+              body: body,
+              labels: ['release', 'bug']
+            });
