@@ -23,6 +23,26 @@ class AuthSchemaManager:
         await conn.execute(rbac_sql)
         logger.info("RBAC schema created/updated")
 
+    async def create_emergency_access_schema(self, conn: asyncpg.Connection) -> None:
+        """Create emergency access schema.
+
+        HIPAA Citation: 45 CFR 164.312(a)(2)(ii) - REQUIRED specification
+        """
+        sql_path = files("vcf_pg_loader.db.schema").joinpath("emergency_access_tables.sql")
+        sql = sql_path.read_text()
+        await conn.execute(sql)
+        logger.info("Emergency access schema created/updated")
+
+    async def emergency_access_exists(self, conn: asyncpg.Connection) -> bool:
+        return await conn.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.tables
+                WHERE table_name = 'emergency_access_tokens'
+            )
+            """
+        )
+
     async def schema_exists(self, conn: asyncpg.Connection) -> bool:
         result = await conn.fetchval(
             """
