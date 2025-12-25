@@ -26,14 +26,19 @@ CREATE TABLE IF NOT EXISTS users (
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     last_login_at TIMESTAMPTZ,
 
-    -- MFA (optional)
+    -- MFA (Multi-Factor Authentication)
+    -- HIPAA Citation: 45 CFR 164.312(d) - Person or Entity Authentication
+    -- HHS Security Series Paper #4: MFA uses 2+ factors (known, possessed, biometric)
     mfa_enabled BOOLEAN DEFAULT false,
-    mfa_secret TEXT
+    mfa_secret TEXT,
+    mfa_pending BOOLEAN DEFAULT false,
+    mfa_enrolled_at TIMESTAMPTZ
 );
 
 CREATE INDEX IF NOT EXISTS idx_users_username ON users (username);
 CREATE INDEX IF NOT EXISTS idx_users_email ON users (email) WHERE email IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_users_active ON users (is_active) WHERE is_active = true;
+CREATE INDEX IF NOT EXISTS idx_users_mfa ON users (mfa_enabled) WHERE mfa_enabled = true;
 
 -- Password history for reuse prevention
 CREATE TABLE IF NOT EXISTS password_history (
@@ -156,3 +161,40 @@ GRANT SELECT, INSERT ON password_history TO auth_admin;
 GRANT SELECT, INSERT, DELETE ON user_sessions TO auth_admin;
 GRANT USAGE, SELECT ON SEQUENCE users_user_id_seq TO auth_admin;
 GRANT USAGE, SELECT ON SEQUENCE password_history_id_seq TO auth_admin;
+
+-- MFA Recovery Codes table
+-- HIPAA Citation: 45 CFR 164.312(d) - Account recovery with second factor backup
+CREATE TABLE IF NOT EXISTS mfa_recovery_codes (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    code_hash TEXT NOT NULL,
+    is_used BOOLEAN DEFAULT false,
+    used_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_mfa_recovery_user ON mfa_recovery_codes (user_id);
+CREATE INDEX IF NOT EXISTS idx_mfa_recovery_unused
+    ON mfa_recovery_codes (user_id, is_used)
+    WHERE is_used = false;
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON mfa_recovery_codes TO auth_admin;
+GRANT USAGE, SELECT ON SEQUENCE mfa_recovery_codes_id_seq TO auth_admin;
+
+-- Add MFA columns if they don't exist (for schema upgrades)
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'users' AND column_name = 'mfa_pending'
+    ) THEN
+        ALTER TABLE users ADD COLUMN mfa_pending BOOLEAN DEFAULT false;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'users' AND column_name = 'mfa_enrolled_at'
+    ) THEN
+        ALTER TABLE users ADD COLUMN mfa_enrolled_at TIMESTAMPTZ;
+    END IF;
+END$$;

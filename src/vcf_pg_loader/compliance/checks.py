@@ -1,4 +1,11 @@
-"""HIPAA compliance check definitions and data models."""
+"""HIPAA compliance check definitions and data models.
+
+HIPAA Security Rule Technical Safeguards: 45 CFR 164.312
+Documentation Requirements: 45 CFR 164.316
+
+This module defines compliance checks mapped to specific HIPAA citations.
+Each check references the relevant CFR section for audit traceability.
+"""
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -133,8 +140,8 @@ CHECKS: list[ComplianceCheck] = [
         id="ENCRYPTION_AT_REST",
         name="Encryption at Rest",
         hipaa_reference="164.312(a)(2)(iv)",
-        description="Verify data encryption at rest",
-        severity=Severity.MEDIUM,
+        description="Verify data encryption at rest per NIST SP 800-111 (AES-256)",
+        severity=Severity.HIGH,
     ),
     ComplianceCheck(
         id="SESSION_TIMEOUT",
@@ -170,6 +177,39 @@ CHECKS: list[ComplianceCheck] = [
         hipaa_reference="164.530(j)",
         description="Verify secure disposal procedures are in place",
         severity=Severity.MEDIUM,
+    ),
+    # 45 CFR 164.312(a)(2)(ii) - REQUIRED specification
+    # "Establish (and implement as needed) procedures for obtaining necessary
+    # electronic protected health information during an emergency."
+    ComplianceCheck(
+        id="EMERGENCY_ACCESS",
+        name="Emergency Access Procedure",
+        hipaa_reference="164.312(a)(2)(ii)",
+        description="Verify emergency access (break-glass) procedures are implemented",
+        severity=Severity.CRITICAL,
+    ),
+    # 45 CFR 164.312(d) - REQUIRED standard
+    # "Implement procedures to verify that a person or entity seeking access to
+    # electronic protected health information is the one claimed."
+    # HHS Security Series Paper #4: Multi-factor uses 2+ of: something known,
+    # something possessed, something unique (biometric).
+    ComplianceCheck(
+        id="MFA_ENABLED",
+        name="Multi-Factor Authentication",
+        hipaa_reference="164.312(d)",
+        description="Verify MFA is enabled for user authentication",
+        severity=Severity.CRITICAL,
+    ),
+    # 45 CFR 164.316(b)(2)(i) - REQUIRED
+    # "Retain the documentation required by paragraph (b)(1) of this section for
+    # 6 years from the date of its creation or the date when it last was in
+    # effect, whichever is later."
+    ComplianceCheck(
+        id="AUDIT_RETENTION",
+        name="Audit Log Retention Policy",
+        hipaa_reference="164.316(b)(2)(i)",
+        description="Verify 6-year audit log retention policy is enforced",
+        severity=Severity.CRITICAL,
     ),
 ]
 

@@ -223,10 +223,13 @@ class TestComplianceReport:
 
 
 class TestCheckRegistry:
+    """45 CFR 164.312: Compliance check registry tests."""
+
     def test_checks_list_not_empty(self):
-        assert len(CHECKS) >= 6
+        assert len(CHECKS) >= 13
 
     def test_required_checks_present(self):
+        """Verify all HIPAA-required checks are registered."""
         check_ids = {c.id for c in CHECKS}
         assert "TLS_ENABLED" in check_ids
         assert "AUDIT_ENABLED" in check_ids
@@ -234,6 +237,10 @@ class TestCheckRegistry:
         assert "RBAC_CONFIGURED" in check_ids
         assert "ENCRYPTION_AT_REST" in check_ids
         assert "SESSION_TIMEOUT" in check_ids
+        # New HIPAA-required checks
+        assert "EMERGENCY_ACCESS" in check_ids  # 45 CFR 164.312(a)(2)(ii) - REQUIRED
+        assert "MFA_ENABLED" in check_ids  # 45 CFR 164.312(d)
+        assert "AUDIT_RETENTION" in check_ids  # 45 CFR 164.316(b)(2)(i) - REQUIRED
 
     def test_all_checks_have_hipaa_reference(self):
         for check in CHECKS:
@@ -250,8 +257,42 @@ class TestCheckRegistry:
         assert check is None
 
     def test_critical_checks(self):
+        """45 CFR 164.312: Verify critical-severity checks."""
         critical_checks = [c for c in CHECKS if c.severity == Severity.CRITICAL]
         critical_ids = {c.id for c in critical_checks}
         assert "TLS_ENABLED" in critical_ids
         assert "AUDIT_ENABLED" in critical_ids
         assert "AUTH_REQUIRED" in critical_ids
+        assert "AUDIT_IMMUTABILITY" in critical_ids
+        # New critical checks
+        assert "EMERGENCY_ACCESS" in critical_ids  # 45 CFR 164.312(a)(2)(ii) - REQUIRED
+        assert "MFA_ENABLED" in critical_ids  # 45 CFR 164.312(d)
+        assert "AUDIT_RETENTION" in critical_ids  # 45 CFR 164.316(b)(2)(i) - REQUIRED
+
+    def test_hipaa_citations_format(self):
+        """All checks must have proper HIPAA citations."""
+        for check in CHECKS:
+            assert check.hipaa_reference.startswith(
+                "164."
+            ), f"Check {check.id} has invalid HIPAA reference: {check.hipaa_reference}"
+
+    def test_emergency_access_check(self):
+        """45 CFR 164.312(a)(2)(ii): Emergency access procedure check."""
+        check = get_check_by_id("EMERGENCY_ACCESS")
+        assert check is not None
+        assert check.severity == Severity.CRITICAL
+        assert "164.312(a)(2)(ii)" in check.hipaa_reference
+
+    def test_mfa_check(self):
+        """45 CFR 164.312(d): MFA check."""
+        check = get_check_by_id("MFA_ENABLED")
+        assert check is not None
+        assert check.severity == Severity.CRITICAL
+        assert "164.312(d)" in check.hipaa_reference
+
+    def test_audit_retention_check(self):
+        """45 CFR 164.316(b)(2)(i): Audit retention check."""
+        check = get_check_by_id("AUDIT_RETENTION")
+        assert check is not None
+        assert check.severity == Severity.CRITICAL
+        assert "164.316(b)(2)(i)" in check.hipaa_reference
