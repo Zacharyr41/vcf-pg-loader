@@ -35,6 +35,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     zlib1g \
     libbz2-1.0 \
     liblzma5 \
+    procps \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
