@@ -4,41 +4,89 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to release (e.g., v0.5.0)'
+        description: 'Version to release (e.g., 0.5.4)'
         required: true
         type: string
+      skip_bioconda:
+        description: 'Skip Bioconda update notification'
+        required: false
+        type: boolean
+        default: false
+      skip_nfcore:
+        description: 'Skip nf-core module update'
+        required: false
+        type: boolean
+        default: false
+      dry_run:
+        description: 'Dry run (build but do not publish)'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
-  release:
+  validate-version:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate semver format
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid version format '$VERSION'. Expected X.Y.Z (e.g., 0.5.4)"
+            exit 1
+          fi
+          echo "Version $VERSION is valid"
+
+  bump-and-tag:
+    needs: validate-version
     runs-on: ubuntu-latest
     permissions:
       contents: write
-
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set version
-        id: version
-        run: echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ steps.version.outputs.version }}
-          name: ${{ steps.version.outputs.version }}
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-  publish-pypi:
-    needs: release
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install bump-my-version
+        run: uv tool install bump-my-version
+
+      - name: Bump version
+        run: |
+          bump-my-version bump --new-version ${{ inputs.version }}
+          echo "Bumped to version ${{ inputs.version }}"
+
+      - name: Push changes
+        if: ${{ !inputs.dry_run }}
+        run: |
+          git push origin HEAD
+          git push origin v${{ inputs.version }}
+
+      - name: Dry run notice
+        if: ${{ inputs.dry_run }}
+        run: |
+          echo "::notice::Dry run - skipping push"
+          git log -1 --oneline
+          git tag -l "v${{ inputs.version }}"
+
+  build:
+    needs: bump-and-tag
     runs-on: ubuntu-latest
-    environment: pypi
-    permissions:
-      id-token: write
-
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: v${{ inputs.version }}
+        if: ${{ !inputs.dry_run }}
+
+      - uses: actions/checkout@v4
+        if: ${{ inputs.dry_run }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -51,5 +99,206 @@ jobs:
       - name: Build package
         run: python -m build
 
+      - name: Upload dist artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 5
+
+  publish-pypi:
+    needs: build
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - name: Download dist artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Display artifacts
+        run: ls -la dist/
+
+      - name: Print SHA256 hashes
+        run: |
+          echo "## Package Hashes" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          sha256sum dist/* >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+
+  create-github-release:
+    needs: publish-pypi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download dist artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ inputs.version }}
+          name: v${{ inputs.version }}
+          generate_release_notes: true
+          files: dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  wait-for-pypi:
+    needs: publish-pypi
+    runs-on: ubuntu-latest
+    outputs:
+      sha256: ${{ steps.poll.outputs.sha256 }}
+    steps:
+      - name: Wait for PyPI availability
+        id: poll
+        run: |
+          VERSION="${{ inputs.version }}"
+          URL="https://pypi.org/pypi/vcf-pg-loader/${VERSION}/json"
+
+          for i in $(seq 1 30); do
+            echo "Attempt $i/30: Checking $URL"
+            if response=$(curl -sf "$URL"); then
+              echo "Package found on PyPI!"
+              sha256=$(echo "$response" | jq -r '.urls[] | select(.packagetype == "sdist") | .digests.sha256')
+              echo "SHA256: $sha256"
+              echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "Not available yet, waiting 10s..."
+            sleep 10
+          done
+
+          echo "::error::Package not available on PyPI after 5 minutes"
+          exit 1
+
+  bioconda-pr:
+    needs: wait-for-pypi
+    if: ${{ !inputs.skip_bioconda }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    outputs:
+      pr_url: ${{ steps.create-pr.outputs.pull-request-url }}
+      outcome: ${{ steps.create-pr.outcome }}
+    steps:
+      - name: Checkout bioconda-recipes fork
+        uses: actions/checkout@v4
+        with:
+          repository: Zacharyr41/bioconda-recipes
+          token: ${{ secrets.BIOCONDA_PAT }}
+          fetch-depth: 0
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/bioconda/bioconda-recipes.git
+          git fetch upstream master
+          git checkout -B update-vcf-pg-loader-${{ inputs.version }} upstream/master
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install grayskull
+        run: pip install grayskull
+
+      - name: Generate recipe
+        run: |
+          grayskull pypi vcf-pg-loader==${{ inputs.version }} -o recipes/
+
+      - name: Create Pull Request
+        id: create-pr
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.BIOCONDA_PAT }}
+          push-to-fork: Zacharyr41/bioconda-recipes
+          branch: update-vcf-pg-loader-${{ inputs.version }}
+          base: master
+          title: "Update vcf-pg-loader to ${{ inputs.version }}"
+          body: |
+            ## Automated BioConda Recipe Update
+
+            Updates `vcf-pg-loader` to version `${{ inputs.version }}`.
+
+            - **PyPI**: https://pypi.org/project/vcf-pg-loader/${{ inputs.version }}/
+            - **Changelog**: https://github.com/${{ github.repository }}/releases/tag/v${{ inputs.version }}
+            - **SHA256**: `${{ needs.wait-for-pypi.outputs.sha256 }}`
+
+            ---
+            🤖 This PR was automatically generated by the vcf-pg-loader release workflow.
+
+  notify-bioconda-status:
+    needs: bioconda-pr
+    if: always() && !inputs.skip_bioconda
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - name: Comment on release with PR link
+        if: needs.bioconda-pr.outputs.pr_url != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createCommitComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: '${{ github.sha }}',
+              body: `🧬 BioConda PR created: ${{ needs.bioconda-pr.outputs.pr_url }}`
+            });
+
+            const releases = await github.rest.repos.listReleases({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 5
+            });
+
+            const release = releases.data.find(r => r.tag_name === 'v${{ inputs.version }}');
+            if (release) {
+              await github.rest.repos.updateRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: release.id,
+                body: release.body + '\n\n---\n🧬 **BioConda PR**: ${{ needs.bioconda-pr.outputs.pr_url }}'
+              });
+            }
+
+      - name: Create issue for manual BioConda PR
+        if: needs.bioconda-pr.outputs.pr_url == '' && needs.bioconda-pr.result == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: 'Manual BioConda PR needed for v${{ inputs.version }}',
+              body: `The automated BioConda PR creation failed for v${{ inputs.version }}.
+
+            ## Manual Steps
+
+            1. Fork [bioconda-recipes](https://github.com/bioconda/bioconda-recipes) if not already done
+            2. Install grayskull: \`pip install grayskull\`
+            3. Generate recipe: \`grayskull pypi vcf-pg-loader==${{ inputs.version }} -o recipes/\`
+            4. Submit PR to bioconda-recipes
+
+            ## References
+
+            - [PyPI Release](https://pypi.org/project/vcf-pg-loader/${{ inputs.version }}/)
+            - [GitHub Release](https://github.com/${{ github.repository }}/releases/tag/v${{ inputs.version }})
+            - [BioConda Contributing Guide](https://bioconda.github.io/contributor/index.html)
+
+            ---
+            🤖 This issue was automatically created by the release workflow.`,
+              labels: ['bioconda', 'release']
+            });
