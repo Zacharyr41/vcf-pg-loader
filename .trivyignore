@@ -1,0 +1,29 @@
+# Trivy Ignore File
+# ==================
+# This file documents accepted security risks for the vcf-pg-loader project.
+# Each entry should be reviewed periodically and removed when fixes are applied.
+#
+# HIPAA Security Review Process:
+# 1. All vulnerabilities are automatically reported to GitHub Security
+# 2. Critical/High vulnerabilities are reviewed within 7 days
+# 3. Accepted risks are documented here with justification
+# 4. This file is audited quarterly for compliance
+#
+# Last Review: 2025-12-25
+# Reviewed By: Automated CI
+# Next Review: 2026-03-25
+
+# Base Image Vulnerabilities
+# --------------------------
+# The python:3.12-slim-bookworm base image may contain OS-level vulnerabilities
+# that are mitigated by:
+# - Running as non-root user (vcfloader)
+# - No network services exposed in container
+# - Read-only filesystem for application code
+# - Regular base image updates
+
+# Known Accepted Risks
+# --------------------
+# Add specific CVE IDs below with justification if needed
+# Format: CVE-YYYY-NNNNN # Justification
+

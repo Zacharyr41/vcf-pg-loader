@@ -8,7 +8,7 @@ secure linkage capability for authorized users.
 """
 
 from .alerting import AlertAction, AlertConfig, AlertEvent, LoadContext, PHIAlertHandler
-from .anonymizer import SampleAnonymizer
+from .anonymizer import SampleAnonymizer, log_re_identification_warning
 from .detector import PHIDetection, PHIDetector, PHIScanReport
 from .encryption import (
     EncryptionStatus,
@@ -48,6 +48,7 @@ __all__ = [
     "PHIScanResult",
     "PHISchemaManager",
     "SampleAnonymizer",
+    "log_re_identification_warning",
     "SanitizationConfig",
     "SanitizationReport",
     "SanitizedHeader",
