@@ -1,3 +1,7 @@
+# DEPRECATED: Primary Docker publishing is now handled by release.yml workflow.
+# This workflow serves as a fallback for manual tag pushes or release events
+# triggered outside the release.yml workflow.
+# See: .github/workflows/release.yml (build-and-push-docker job)
 name: Publish Docker image
 
 on:
