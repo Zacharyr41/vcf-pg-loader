@@ -35,6 +35,8 @@ class TestAuditEventType:
             "PERMISSION_CHANGE",
             "PHI_ACCESS",
             "EMERGENCY_ACCESS",
+            "SESSION_TIMEOUT",
+            "SESSION_TERMINATED",
         }
         actual = {e.value for e in AuditEventType}
         assert actual == expected

@@ -4,7 +4,8 @@ from typer.testing import CliRunner
 
 from vcf_pg_loader.cli import app
 
-runner = CliRunner()
+runner = CliRunner(env={"NO_COLOR": "1", "TERM": "dumb"})
+runner_no_db = CliRunner(env={"NO_COLOR": "1", "TERM": "dumb", "VCF_PG_LOADER_NO_MANAGED_DB": "1"})
 
 
 class TestComplianceCommands:
@@ -21,9 +22,9 @@ class TestComplianceCommands:
         assert "--json" in result.output
 
     def test_compliance_check_requires_db(self):
-        result = runner.invoke(app, ["compliance", "check"])
+        result = runner_no_db.invoke(app, ["compliance", "check"])
         assert result.exit_code == 1
-        assert "Database connection required" in result.output or "Error" in result.output
+        assert "Database connection required" in result.output
 
     def test_compliance_report_help(self):
         result = runner.invoke(app, ["compliance", "report", "--help"])
@@ -32,8 +33,9 @@ class TestComplianceCommands:
         assert "--output" in result.output
 
     def test_compliance_report_requires_db(self):
-        result = runner.invoke(app, ["compliance", "report"])
+        result = runner_no_db.invoke(app, ["compliance", "report"])
         assert result.exit_code == 1
+        assert "Database connection required" in result.output
 
     def test_compliance_status_help(self):
         result = runner.invoke(app, ["compliance", "status", "--help"])
@@ -41,5 +43,6 @@ class TestComplianceCommands:
         assert "--json" in result.output
 
     def test_compliance_status_requires_db(self):
-        result = runner.invoke(app, ["compliance", "status"])
+        result = runner_no_db.invoke(app, ["compliance", "status"])
         assert result.exit_code == 1
+        assert "Database connection required" in result.output
