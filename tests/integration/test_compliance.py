@@ -53,7 +53,7 @@ class TestComplianceValidatorIntegration:
 
     async def test_auth_check_passes_with_schema(self, compliance_db):
         auth_schema = AuthSchemaManager()
-        await auth_schema.create_schema(compliance_db)
+        await auth_schema.create_auth_schema(compliance_db)
 
         validator = ComplianceValidator(compliance_db)
         result = await validator.check_authentication()
@@ -86,7 +86,7 @@ class TestComplianceReportIntegration:
         await audit_schema.create_initial_partitions(test_db, months_ahead=1)
 
         auth_schema = AuthSchemaManager()
-        await auth_schema.create_schema(test_db)
+        await auth_schema.create_auth_schema(test_db)
 
         yield test_db
 
