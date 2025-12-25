@@ -102,7 +102,7 @@ jobs:
   # are updated by bump-my-version, NOT by this job.
   # =============================================================================
   verify-nfcore-module-versions:
-    needs: bump-and-tag
+    needs: [bump-and-tag, build-and-push-docker]
     if: ${{ !inputs.skip_nfcore }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
