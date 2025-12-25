@@ -1,4 +1,4 @@
-.PHONY: help dev-up dev-down dev-restart dev-logs install test lint format clean test-data test-data-download test-data-clone test-data-status deps
+.PHONY: help dev-up dev-down dev-restart dev-logs install test lint format clean test-data test-data-download test-data-clone test-data-status deps version-check release-check nf-core-lint nf-core-diff nf-core-create-branch nf-core-update-branch nf-core-status
 
 help: ## Show this help message
 	@echo "Available commands:"
@@ -118,3 +118,36 @@ test-integration: dev-up test-data ## Run integration tests
 
 test-acceptance: test-data ## Run acceptance tests
 	uv run pytest -v -m "acceptance"
+
+version-check: ## Check all version references are in sync
+	./scripts/check-version-sync.sh
+
+release-check: ## Pre-flight validation for release (VERSION=X.Y.Z optional)
+	@if [ -z "$(VERSION)" ]; then \
+		./scripts/validate-release.sh; \
+	else \
+		./scripts/validate-release.sh $(VERSION); \
+	fi
+
+nf-core-lint: ## Lint local nf-core module
+	./scripts/nf-core-module.sh lint
+
+nf-core-diff: ## Show diff against upstream nf-core/modules
+	./scripts/nf-core-module.sh diff
+
+nf-core-create-branch: ## Create branch in fork (VERSION=X.Y.Z required)
+	@if [ -z "$(VERSION)" ]; then \
+		echo "Usage: make nf-core-create-branch VERSION=X.Y.Z"; \
+		exit 1; \
+	fi
+	./scripts/nf-core-module.sh create-branch $(VERSION)
+
+nf-core-update-branch: ## Update existing branch in fork (BRANCH=name required)
+	@if [ -z "$(BRANCH)" ]; then \
+		echo "Usage: make nf-core-update-branch BRANCH=update-vcfpgloader-X.Y.Z"; \
+		exit 1; \
+	fi
+	./scripts/nf-core-module.sh update-branch $(BRANCH)
+
+nf-core-status: ## Show nf-core fork/PR status
+	./scripts/nf-core-module.sh status

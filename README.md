@@ -1,5 +1,6 @@
 # vcf-pg-loader
 
+[![CI](https://github.com/Zacharyr41/vcf-pg-loader/actions/workflows/ci.yml/badge.svg)](https://github.com/Zacharyr41/vcf-pg-loader/actions/workflows/ci.yml)
 [![install with bioconda](https://img.shields.io/badge/install%20with-bioconda-brightgreen.svg?style=flat)](http://bioconda.github.io/recipes/vcf-pg-loader/README.html)
 [![PyPI version](https://badge.fury.io/py/vcf-pg-loader.svg)](https://badge.fury.io/py/vcf-pg-loader)
 
@@ -51,6 +52,27 @@ git clone https://github.com/Zacharyr41/vcf-pg-loader.git
 cd vcf-pg-loader
 uv pip install -e ".[dev]"
 ```
+
+### Nextflow Module
+
+For use in Nextflow pipelines, the `vcfpgloader/load` module is available:
+
+```nextflow
+include { VCFPGLOADER } from './modules/local/vcfpgloader/load/main'
+
+workflow {
+    VCFPGLOADER(
+        ch_vcf,           // tuple val(meta), path(vcf), path(tbi)
+        params.db_host,
+        params.db_port,
+        params.db_name,
+        params.db_user,
+        params.db_schema
+    )
+}
+```
+
+The module uses `PGPASSWORD` as a Nextflow secret. See [nf-core modules](https://github.com/nf-core/modules) for integration into nf-core pipelines.
 
 ### Verify Installation
 

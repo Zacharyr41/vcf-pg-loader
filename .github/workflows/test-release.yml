@@ -1,0 +1,250 @@
+name: Test Release
+
+on:
+  push:
+    branches:
+      - 'release/**'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to test (e.g., 0.5.4)'
+        required: false
+        type: string
+
+jobs:
+  version-sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check version sync
+        run: ./scripts/check-version-sync.sh
+
+  validate-version-format:
+    if: inputs.version != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate semver format
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid version format '$VERSION'. Expected X.Y.Z"
+            exit 1
+          fi
+          echo "Version $VERSION is valid"
+
+  bump-preview:
+    needs: version-sync
+    if: inputs.version != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install bump-my-version
+        run: uv tool install bump-my-version
+
+      - name: Preview version bump
+        run: |
+          echo "## Version Bump Preview" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Target version: ${{ inputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          bump-my-version bump --new-version ${{ inputs.version }} --dry-run --verbose 2>&1 >> $GITHUB_STEP_SUMMARY || true
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Show file diffs
+        run: |
+          bump-my-version bump --new-version ${{ inputs.version }} --dry-run
+          echo ""
+          echo "Files that would be modified:"
+          git diff --name-only || true
+
+  build-package:
+    needs: version-sync
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tools
+        run: pip install build
+
+      - name: Build package
+        run: python -m build
+
+      - name: Display artifacts
+        run: |
+          ls -la dist/
+          echo ""
+          echo "## Package Build" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| File | Size |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|------|" >> $GITHUB_STEP_SUMMARY
+          for f in dist/*; do
+            size=$(ls -lh "$f" | awk '{print $5}')
+            echo "| $(basename $f) | $size |" >> $GITHUB_STEP_SUMMARY
+          done
+
+      - name: Upload dist artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-test
+          path: dist/
+          retention-days: 3
+
+  build-docker:
+    needs: version-sync
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract version
+        id: version
+        run: |
+          VERSION=$(grep -E '^version = "[0-9]+\.[0-9]+\.[0-9]+"' pyproject.toml | sed 's/.*"\([0-9.]*\)".*/\1/')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Build Docker image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: |
+            ghcr.io/zacharyr41/vcf-pg-loader:${{ steps.version.outputs.version }}
+            ghcr.io/zacharyr41/vcf-pg-loader:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Report Docker build
+        run: |
+          echo "## Docker Build" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Image would be tagged:" >> $GITHUB_STEP_SUMMARY
+          echo "- \`ghcr.io/zacharyr41/vcf-pg-loader:${{ steps.version.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`ghcr.io/zacharyr41/vcf-pg-loader:latest\`" >> $GITHUB_STEP_SUMMARY
+
+  verify-nfcore-module:
+    needs: version-sync
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version
+        id: version
+        run: |
+          VERSION=$(grep -E '^version = "[0-9]+\.[0-9]+\.[0-9]+"' pyproject.toml | sed 's/.*"\([0-9.]*\)".*/\1/')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Verify nf-core module versions
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          echo "Checking nf-core module files for version $VERSION"
+
+          MAIN_NF="nf-core/modules/vcfpgloader/load/main.nf"
+          ENV_YML="nf-core/modules/vcfpgloader/load/environment.yml"
+
+          errors=0
+
+          if grep -q "ghcr.io/zacharyr41/vcf-pg-loader:${VERSION}" "$MAIN_NF"; then
+            echo "✓ main.nf container tag matches"
+          else
+            echo "✗ main.nf container tag mismatch"
+            echo "  Expected: ghcr.io/zacharyr41/vcf-pg-loader:${VERSION}"
+            echo "  Found: $(grep -o 'ghcr.io/zacharyr41/vcf-pg-loader:[0-9.]*' "$MAIN_NF" || echo 'not found')"
+            errors=$((errors + 1))
+          fi
+
+          if grep -q "bioconda::vcf-pg-loader=${VERSION}" "$ENV_YML"; then
+            echo "✓ environment.yml bioconda package matches"
+          else
+            echo "✗ environment.yml bioconda package mismatch"
+            echo "  Expected: bioconda::vcf-pg-loader=${VERSION}"
+            echo "  Found: $(grep -o 'bioconda::vcf-pg-loader=[0-9.]*' "$ENV_YML" || echo 'not found')"
+            errors=$((errors + 1))
+          fi
+
+          if [ $errors -gt 0 ]; then
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install nf-core tools
+        run: pip install nf-core
+
+      - name: Lint nf-core module
+        continue-on-error: true
+        run: |
+          mkdir -p temp_modules/modules/nf-core/vcfpgloader
+          cp -r nf-core/modules/vcfpgloader/load temp_modules/modules/nf-core/vcfpgloader/
+          cd temp_modules
+          git init
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "temp"
+          nf-core modules lint vcfpgloader/load --dir . || echo "::warning::nf-core lint reported issues"
+
+  test-summary:
+    needs: [version-sync, build-package, build-docker, verify-nfcore-module]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version
+        id: version
+        run: |
+          VERSION=$(grep -E '^version = "[0-9]+\.[0-9]+\.[0-9]+"' pyproject.toml | sed 's/.*"\([0-9.]*\)".*/\1/')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Generate summary
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TARGET="${{ inputs.version }}"
+
+          echo "## Test Release Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Version Sync | ${{ needs.version-sync.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Package Build | ${{ needs.build-package.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Docker Build | ${{ needs.build-docker.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| nf-core Module | ${{ needs.verify-nfcore-module.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "### What Would Be Published" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **PyPI**: vcf-pg-loader==$VERSION" >> $GITHUB_STEP_SUMMARY
+          echo "- **Docker**: ghcr.io/zacharyr41/vcf-pg-loader:$VERSION" >> $GITHUB_STEP_SUMMARY
+          echo "- **BioConda**: bioconda::vcf-pg-loader=$VERSION" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [[ -n "$TARGET" && "$TARGET" != "$VERSION" ]]; then
+            echo "### Version Bump Required" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Current: $VERSION → Target: $TARGET" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Run: \`bump-my-version bump --new-version $TARGET\`" >> $GITHUB_STEP_SUMMARY
+          fi

@@ -4,8 +4,8 @@ process VCFPGLOADER {
 
     conda "${moduleDir}/environment.yml"
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
-        'oras://ghcr.io/zacharyr41/vcf-pg-loader:0.4.0' :
-        'ghcr.io/zacharyr41/vcf-pg-loader:0.4.0' }"
+        'oras://ghcr.io/zacharyr41/vcf-pg-loader:0.5.3' :
+        'ghcr.io/zacharyr41/vcf-pg-loader:0.5.3' }"
 
     secret 'PGPASSWORD'
 

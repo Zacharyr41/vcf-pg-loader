@@ -56,6 +56,9 @@ dev = [
     # Testing utilities
     "testcontainers[postgres]>=4.0.0", # Docker-based PostgreSQL for tests
     "factory-boy>=3.3.0",              # Test factories
+
+    # Version management
+    "bump-my-version>=0.24.0",
 ]
 
 [project.scripts]
@@ -120,3 +123,33 @@ python_version = "3.11"
 strict = true
 warn_return_any = true
 warn_unused_ignores = true
+
+[tool.bumpversion]
+current_version = "0.5.3"
+parse = "(?P<major>\\d+)\\.(?P<minor>\\d+)\\.(?P<patch>\\d+)"
+serialize = ["{major}.{minor}.{patch}"]
+commit = true
+tag = true
+tag_name = "v{new_version}"
+tag_message = "Release v{new_version}"
+message = "chore(release): v{new_version} [skip ci]"
+
+[[tool.bumpversion.files]]
+filename = "pyproject.toml"
+search = 'version = "{current_version}"'
+replace = 'version = "{new_version}"'
+
+[[tool.bumpversion.files]]
+filename = "bioconda/meta.yaml"
+search = '{{% set version = "{current_version}" %}}'
+replace = '{{% set version = "{new_version}" %}}'
+
+[[tool.bumpversion.files]]
+filename = "nf-core/modules/vcfpgloader/load/main.nf"
+search = "ghcr.io/zacharyr41/vcf-pg-loader:{current_version}"
+replace = "ghcr.io/zacharyr41/vcf-pg-loader:{new_version}"
+
+[[tool.bumpversion.files]]
+filename = "nf-core/modules/vcfpgloader/load/environment.yml"
+search = "bioconda::vcf-pg-loader={current_version}"
+replace = "bioconda::vcf-pg-loader={new_version}"
