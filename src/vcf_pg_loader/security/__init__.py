@@ -5,8 +5,10 @@ NIST SP 800-111 - Guide to Storage Encryption Technologies
 """
 
 from .encryption import EncryptionKey, EncryptionManager
+from .schema import SecuritySchemaManager
 
 __all__ = [
     "EncryptionKey",
     "EncryptionManager",
+    "SecuritySchemaManager",
 ]

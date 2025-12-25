@@ -1468,6 +1468,250 @@ def audit_stats(
         raise typer.Exit(1) from None
 
 
+retention_app = typer.Typer(help="Audit log retention policy management (HIPAA 164.316(b)(2)(i))")
+audit_app.add_typer(retention_app, name="retention")
+
+
+@retention_app.command("init")
+def retention_init(
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Initialize audit retention schema.
+
+    Creates the audit_retention_policy table with HIPAA-compliant defaults.
+
+    \b
+    HIPAA Reference: 164.316(b)(2)(i) - 6-Year Minimum Retention
+    """
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        console.print("[red]Error: Database connection required[/red]")
+        raise typer.Exit(1)
+
+    async def run():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            from .audit.retention import AuditRetentionManager
+
+            manager = AuditRetentionManager()
+            await manager.create_retention_schema(conn)
+            console.print("[green]✓[/green] Audit retention schema initialized")
+            console.print("  Default policy: 6-year retention per HIPAA")
+        finally:
+            await conn.close()
+
+    asyncio.run(run())
+
+
+@retention_app.command("status")
+def retention_status(
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    json_output: bool = typer.Option(False, "--json", "-j", help="Output as JSON"),
+) -> None:
+    """Show audit log retention status.
+
+    Displays current retention policy, compliance status, and partition info.
+
+    \b
+    HIPAA Reference: 164.316(b)(2)(i) - 6-Year Minimum Retention
+    """
+    import json as json_module
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        console.print("[red]Error: Database connection required[/red]")
+        raise typer.Exit(1)
+
+    async def run():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            from .audit.retention import AuditRetentionManager
+
+            manager = AuditRetentionManager()
+            return await manager.get_retention_status(conn)
+        finally:
+            await conn.close()
+
+    try:
+        status = asyncio.run(run())
+        if json_output:
+            console.print(json_module.dumps(status.to_dict(), indent=2))
+        else:
+            console.print("[bold]Audit Retention Status[/bold]")
+            console.print()
+            if status.has_policy:
+                if status.is_compliant:
+                    console.print("[green]✓ HIPAA Compliant[/green]")
+                else:
+                    console.print("[red]✗ NOT HIPAA Compliant[/red]")
+                console.print(f"  Retention Period: {status.retention_years} years")
+                enforcement = (
+                    "[green]Enabled[/green]"
+                    if status.enforcement_enabled
+                    else "[red]Disabled[/red]"
+                )
+                console.print(f"  Enforcement: {enforcement}")
+            else:
+                console.print("[yellow]No retention policy configured[/yellow]")
+            console.print()
+            console.print("[bold]Partition Info[/bold]")
+            console.print(f"  Active Partitions: {status.partition_count}")
+            console.print(f"  Archived Partitions: {status.archived_partition_count}")
+            if status.oldest_partition_date:
+                console.print(f"  Oldest Partition: {status.oldest_partition_date.isoformat()}")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@retention_app.command("set-policy")
+def retention_set_policy(
+    years: Annotated[int, typer.Argument(help="Retention period in years (minimum 6)")],
+    user_id: Annotated[
+        int | None, typer.Option("--user-id", "-u", help="User ID setting policy")
+    ] = None,
+    notes: Annotated[str | None, typer.Option("--notes", "-n", help="Policy notes")] = None,
+    no_enforce: bool = typer.Option(
+        False, "--no-enforce", help="Disable minimum enforcement (not recommended)"
+    ),
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    json_output: bool = typer.Option(False, "--json", "-j", help="Output as JSON"),
+) -> None:
+    """Set audit log retention policy.
+
+    Configures the minimum retention period for audit logs.
+    HIPAA requires at least 6 years retention.
+
+    \b
+    HIPAA Reference: 164.316(b)(2)(i) - 6-Year Minimum Retention
+    """
+    import json as json_module
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        console.print("[red]Error: Database connection required[/red]")
+        raise typer.Exit(1)
+
+    async def run():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            from .audit.retention import AuditRetentionManager
+
+            manager = AuditRetentionManager()
+            return await manager.set_retention_policy(
+                conn,
+                retention_years=years,
+                enforce_minimum=not no_enforce,
+                created_by=user_id,
+                notes=notes,
+            )
+        finally:
+            await conn.close()
+
+    try:
+        policy = asyncio.run(run())
+        if json_output:
+            output = {
+                "policy_id": policy.policy_id,
+                "retention_years": policy.retention_years,
+                "enforce_minimum": policy.enforce_minimum,
+                "is_compliant": policy.is_compliant(),
+                "created_at": policy.created_at.isoformat(),
+            }
+            console.print(json_module.dumps(output, indent=2))
+        else:
+            console.print("[green]✓[/green] Retention policy updated")
+            console.print(f"  Policy ID: {policy.policy_id}")
+            console.print(f"  Retention: {policy.retention_years} years")
+            enforcement = (
+                "[green]Enabled[/green]" if policy.enforce_minimum else "[yellow]Disabled[/yellow]"
+            )
+            console.print(f"  Enforcement: {enforcement}")
+            if policy.is_compliant():
+                console.print("[green]  ✓ HIPAA Compliant[/green]")
+            else:
+                console.print("[red]  ✗ NOT HIPAA Compliant[/red]")
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@retention_app.command("verify")
+def retention_verify(
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    json_output: bool = typer.Option(False, "--json", "-j", help="Output as JSON"),
+) -> None:
+    """Verify retention policy integrity.
+
+    Checks that retention policy is properly configured and enforced.
+
+    \b
+    HIPAA Reference: 164.316(b)(2)(i) - 6-Year Minimum Retention
+    """
+    import json as json_module
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        console.print("[red]Error: Database connection required[/red]")
+        raise typer.Exit(1)
+
+    async def run():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            from .audit.retention import AuditRetentionManager
+
+            manager = AuditRetentionManager()
+            return await manager.verify_retention_integrity(conn)
+        finally:
+            await conn.close()
+
+    try:
+        is_valid, issues = asyncio.run(run())
+        if json_output:
+            output = {
+                "is_valid": is_valid,
+                "issues": issues,
+            }
+            console.print(json_module.dumps(output, indent=2))
+        else:
+            if is_valid:
+                console.print("[green]✓[/green] Retention policy integrity verified")
+                console.print("  All checks passed")
+            else:
+                console.print("[red]✗[/red] Retention policy issues detected")
+                for issue in issues:
+                    console.print(f"  - {issue}")
+                raise typer.Exit(1)
+    except typer.Exit:
+        raise
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
 auth_app = typer.Typer(help="User authentication and management (HIPAA 164.312(d))")
 app.add_typer(auth_app, name="auth")
 
@@ -2096,6 +2340,866 @@ def auth_unlock_user(
                 console.print(f"[green]✓[/green] {message}")
         else:
             console.print(f"[red]Failed: {message}[/red]")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        if not isinstance(e, SystemExit):
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from None
+        raise
+
+
+mfa_app = typer.Typer(help="Multi-factor authentication (HIPAA 164.312(d))")
+auth_app.add_typer(mfa_app, name="mfa")
+
+
+@mfa_app.command("enroll")
+def mfa_enroll(
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Start MFA enrollment for current user.
+
+    HIPAA Citation: 45 CFR 164.312(d) - Person or Entity Authentication
+    """
+    from .auth import Authenticator, SessionStorage
+    from .auth.mfa import MFAManager
+
+    storage = SessionStorage()
+    token, _ = storage.load_token()
+
+    if not token:
+        console.print("[red]Not logged in. Use 'vcf-pg-loader auth login' first.[/red]")
+        raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_enroll():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            auth = Authenticator(jwt_secret=_get_jwt_secret())
+            session = await auth.validate_session(conn, token)
+            if not session:
+                return None, "Session expired"
+
+            manager = MFAManager()
+            enrollment = await manager.enroll(conn, user_id=session.user_id)
+            return enrollment, None
+        finally:
+            await conn.close()
+
+    try:
+        enrollment, error = asyncio.run(run_enroll())
+        if error:
+            console.print(f"[red]{error}[/red]")
+            raise typer.Exit(1)
+
+        if not quiet:
+            console.print("[green]MFA enrollment started[/green]")
+            console.print("\n[bold]Provisioning URI:[/bold]")
+            console.print(f"  {enrollment.provisioning_uri}")
+            console.print("\n[bold]Recovery codes (save these securely):[/bold]")
+            for code in enrollment.recovery_codes:
+                console.print(f"  {code}")
+            console.print(
+                "\n[yellow]Run 'vcf-pg-loader auth mfa confirm' with a TOTP code to complete enrollment[/yellow]"
+            )
+
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    except Exception as e:
+        if not isinstance(e, SystemExit):
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from None
+        raise
+
+
+@mfa_app.command("confirm")
+def mfa_confirm(
+    code: Annotated[
+        str, typer.Option("--code", "-c", prompt=True, help="TOTP code from authenticator")
+    ],
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Confirm MFA enrollment with TOTP code.
+
+    HIPAA Citation: 45 CFR 164.312(d) - Person or Entity Authentication
+    """
+    from .auth import Authenticator, SessionStorage
+    from .auth.mfa import MFAManager
+
+    storage = SessionStorage()
+    token, _ = storage.load_token()
+
+    if not token:
+        console.print("[red]Not logged in. Use 'vcf-pg-loader auth login' first.[/red]")
+        raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_confirm():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            auth = Authenticator(jwt_secret=_get_jwt_secret())
+            session = await auth.validate_session(conn, token)
+            if not session:
+                return False, "Session expired"
+
+            manager = MFAManager()
+            success = await manager.confirm_enrollment(conn, user_id=session.user_id, code=code)
+            return success, None if success else "Invalid code"
+        finally:
+            await conn.close()
+
+    try:
+        success, error = asyncio.run(run_confirm())
+        if success:
+            if not quiet:
+                console.print("[green]✓[/green] MFA enrollment confirmed")
+        else:
+            console.print(f"[red]Failed: {error}[/red]")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        if not isinstance(e, SystemExit):
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from None
+        raise
+
+
+@mfa_app.command("status")
+def mfa_status(
+    username: Annotated[
+        str | None, typer.Option("--username", "-u", help="Username (admin only)")
+    ] = None,
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Show MFA status for current user or specified user.
+
+    HIPAA Citation: 45 CFR 164.312(d) - Person or Entity Authentication
+    """
+    import json as json_module
+
+    from .auth import Authenticator, SessionStorage, UserManager
+    from .auth.mfa import MFAManager
+
+    storage = SessionStorage()
+    token, _ = storage.load_token()
+
+    if not token:
+        console.print("[red]Not logged in. Use 'vcf-pg-loader auth login' first.[/red]")
+        raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_status():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            auth = Authenticator(jwt_secret=_get_jwt_secret())
+            session = await auth.validate_session(conn, token)
+            if not session:
+                return None, "Session expired"
+
+            target_user_id = session.user_id
+            if username:
+                user_manager = UserManager()
+                target_user = await user_manager.get_user_by_username(conn, username)
+                if not target_user:
+                    return None, f"User '{username}' not found"
+                target_user_id = target_user.user_id
+
+            manager = MFAManager()
+            status = await manager.get_status(conn, user_id=target_user_id)
+            return status, None
+        finally:
+            await conn.close()
+
+    try:
+        status, error = asyncio.run(run_status())
+        if error:
+            console.print(f"[red]{error}[/red]")
+            raise typer.Exit(1)
+
+        if status is None:
+            console.print("[yellow]MFA not configured[/yellow]")
+            return
+
+        if json_output:
+            console.print(
+                json_module.dumps(
+                    {
+                        "user_id": status.user_id,
+                        "mfa_enabled": status.mfa_enabled,
+                        "enrolled_at": status.enrolled_at.isoformat()
+                        if status.enrolled_at
+                        else None,
+                        "recovery_codes_remaining": status.recovery_codes_remaining,
+                    }
+                )
+            )
+        else:
+            if not quiet:
+                enabled_str = (
+                    "[green]Enabled[/green]" if status.mfa_enabled else "[red]Disabled[/red]"
+                )
+                console.print(f"MFA Status: {enabled_str}")
+                if status.enrolled_at:
+                    console.print(f"Enrolled: {status.enrolled_at.isoformat()}")
+                console.print(f"Recovery codes remaining: {status.recovery_codes_remaining}")
+
+    except Exception as e:
+        if not isinstance(e, SystemExit):
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from None
+        raise
+
+
+@mfa_app.command("disable")
+def mfa_disable(
+    username: Annotated[
+        str, typer.Option("--username", "-u", prompt=True, help="Username to disable MFA for")
+    ],
+    reason: Annotated[
+        str, typer.Option("--reason", "-r", prompt=True, help="Reason for disabling MFA")
+    ],
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Disable MFA for a user (admin only).
+
+    HIPAA Citation: 45 CFR 164.312(d) - Person or Entity Authentication
+    """
+    from .auth import Authenticator, SessionStorage, UserManager
+    from .auth.mfa import MFAManager
+
+    storage = SessionStorage()
+    token, _ = storage.load_token()
+
+    if not token:
+        console.print("[red]Not logged in. Use 'vcf-pg-loader auth login' first.[/red]")
+        raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_disable():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            auth = Authenticator(jwt_secret=_get_jwt_secret())
+            session = await auth.validate_session(conn, token)
+            if not session:
+                return False, "Session expired"
+
+            user_manager = UserManager()
+            target_user = await user_manager.get_user_by_username(conn, username)
+            if not target_user:
+                return False, f"User '{username}' not found"
+
+            manager = MFAManager()
+            success = await manager.disable(
+                conn,
+                user_id=target_user.user_id,
+                disabled_by=session.user_id,
+                reason=reason,
+            )
+            return success, None if success else "Failed to disable MFA"
+        finally:
+            await conn.close()
+
+    try:
+        success, error = asyncio.run(run_disable())
+        if success:
+            if not quiet:
+                console.print(f"[green]✓[/green] MFA disabled for {username}")
+        else:
+            console.print(f"[red]Failed: {error}[/red]")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        if not isinstance(e, SystemExit):
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from None
+        raise
+
+
+@mfa_app.command("verify")
+def mfa_verify(
+    code: Annotated[str, typer.Option("--code", "-c", prompt=True, help="TOTP code to verify")],
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Verify a TOTP code for current user.
+
+    HIPAA Citation: 45 CFR 164.312(d) - Person or Entity Authentication
+    """
+    from .auth import Authenticator, SessionStorage
+    from .auth.mfa import MFAManager
+
+    storage = SessionStorage()
+    token, _ = storage.load_token()
+
+    if not token:
+        console.print("[red]Not logged in. Use 'vcf-pg-loader auth login' first.[/red]")
+        raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_verify():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            auth = Authenticator(jwt_secret=_get_jwt_secret())
+            session = await auth.validate_session(conn, token)
+            if not session:
+                return False, "Session expired"
+
+            manager = MFAManager()
+            is_valid = await manager.verify_code(conn, user_id=session.user_id, code=code)
+            return is_valid, None if is_valid else "Invalid code"
+        finally:
+            await conn.close()
+
+    try:
+        is_valid, error = asyncio.run(run_verify())
+        if is_valid:
+            if not quiet:
+                console.print("[green]✓[/green] Code is valid")
+        else:
+            console.print(f"[red]Invalid: {error}[/red]")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        if not isinstance(e, SystemExit):
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from None
+        raise
+
+
+@mfa_app.command("regenerate-codes")
+def mfa_regenerate_codes(
+    code: Annotated[
+        str, typer.Option("--code", "-c", prompt=True, help="Current TOTP code for verification")
+    ],
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Regenerate recovery codes (requires TOTP verification).
+
+    HIPAA Citation: 45 CFR 164.312(d) - Person or Entity Authentication
+    """
+    from .auth import Authenticator, SessionStorage
+    from .auth.mfa import MFAManager
+
+    storage = SessionStorage()
+    token, _ = storage.load_token()
+
+    if not token:
+        console.print("[red]Not logged in. Use 'vcf-pg-loader auth login' first.[/red]")
+        raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_regenerate():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            auth = Authenticator(jwt_secret=_get_jwt_secret())
+            session = await auth.validate_session(conn, token)
+            if not session:
+                return None, "Session expired"
+
+            manager = MFAManager()
+            codes = await manager.regenerate_recovery_codes(
+                conn, user_id=session.user_id, code=code
+            )
+            return codes, None
+        finally:
+            await conn.close()
+
+    try:
+        codes, error = asyncio.run(run_regenerate())
+        if codes is None:
+            console.print(f"[red]Failed: {error or 'Invalid TOTP code'}[/red]")
+            raise typer.Exit(1)
+
+        if not quiet:
+            console.print("[green]✓[/green] Recovery codes regenerated")
+            console.print("\n[bold]New recovery codes (save these securely):[/bold]")
+            for rc in codes:
+                console.print(f"  {rc}")
+
+    except Exception as e:
+        if not isinstance(e, SystemExit):
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from None
+        raise
+
+
+emergency_app = typer.Typer(help="Emergency access procedures (HIPAA 164.312(a)(2)(ii))")
+auth_app.add_typer(emergency_app, name="emergency")
+
+
+@emergency_app.command("init")
+def emergency_init(
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Initialize emergency access schema.
+
+    HIPAA Citation: 45 CFR 164.312(a)(2)(ii) - REQUIRED specification
+    """
+    from .auth.schema import AuthSchemaManager
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_init():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            schema_manager = AuthSchemaManager()
+            await schema_manager.create_emergency_access_schema(conn)
+            return True
+        finally:
+            await conn.close()
+
+    try:
+        asyncio.run(run_init())
+        if not quiet:
+            console.print("[green]✓[/green] Emergency access schema initialized")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@emergency_app.command("grant")
+def emergency_grant(
+    username: Annotated[
+        str, typer.Option("--username", "-u", prompt=True, help="Username to grant access")
+    ],
+    justification: Annotated[
+        str, typer.Option("--justification", "-j", prompt=True, help="Justification (min 20 chars)")
+    ],
+    emergency_type: Annotated[
+        str, typer.Option("--type", "-t", help="Emergency type")
+    ] = "patient_emergency",
+    duration: Annotated[int, typer.Option("--duration", "-d", help="Duration in minutes")] = 60,
+    db_url: Annotated[str | None, typer.Option("--db", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Grant emergency access to a user.
+
+    HIPAA Citation: 45 CFR 164.312(a)(2)(ii) - REQUIRED specification
+    """
+    from .auth import Authenticator, SessionStorage, UserManager
+    from .auth.emergency_access import EmergencyAccessManager, EmergencyType
+
+    storage = SessionStorage()
+    token, _ = storage.load_token()
+
+    if not token:
+        console.print("[red]Not logged in. Use 'vcf-pg-loader auth login' first.[/red]")
+        raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_grant():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            auth = Authenticator(jwt_secret=_get_jwt_secret())
+            session = await auth.validate_session(conn, token)
+            if not session:
+                return None, "Session expired"
+
+            user_manager = UserManager()
+            target_user = await user_manager.get_user_by_username(conn, username)
+            if not target_user:
+                return None, f"User '{username}' not found"
+
+            try:
+                etype = EmergencyType(emergency_type)
+            except ValueError:
+                valid_types = [e.value for e in EmergencyType]
+                return None, f"Invalid emergency type. Valid: {valid_types}"
+
+            manager = EmergencyAccessManager()
+            token_obj = await manager.grant_access(
+                conn,
+                user_id=target_user.user_id,
+                justification=justification,
+                emergency_type=etype,
+                duration_minutes=duration,
+                granted_by=session.user_id,
+            )
+            return token_obj, None
+        finally:
+            await conn.close()
+
+    try:
+        token_obj, error = asyncio.run(run_grant())
+        if error:
+            console.print(f"[red]{error}[/red]")
+            raise typer.Exit(1)
+
+        if not quiet:
+            console.print("[green]✓[/green] Emergency access granted")
+            console.print(f"  Token ID: {token_obj.token_id}")
+            console.print(f"  User: {username}")
+            console.print(f"  Expires: {token_obj.expires_at.isoformat()}")
+            console.print(f"  Minutes remaining: {token_obj.minutes_remaining():.0f}")
+
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    except Exception as e:
+        if not isinstance(e, SystemExit):
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from None
+        raise
+
+
+@emergency_app.command("revoke")
+def emergency_revoke(
+    token_id: Annotated[str, typer.Option("--token", "-t", prompt=True, help="Token ID to revoke")],
+    reason: Annotated[
+        str, typer.Option("--reason", "-r", prompt=True, help="Reason for revocation")
+    ],
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Revoke an emergency access token.
+
+    HIPAA Citation: 45 CFR 164.312(a)(2)(ii) - REQUIRED specification
+    """
+    from .auth import Authenticator, SessionStorage
+    from .auth.emergency_access import EmergencyAccessManager
+
+    storage = SessionStorage()
+    token, _ = storage.load_token()
+
+    if not token:
+        console.print("[red]Not logged in. Use 'vcf-pg-loader auth login' first.[/red]")
+        raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_revoke():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            auth = Authenticator(jwt_secret=_get_jwt_secret())
+            session = await auth.validate_session(conn, token)
+            if not session:
+                return False, "Session expired"
+
+            manager = EmergencyAccessManager()
+            success = await manager.revoke_access(
+                conn,
+                token_id=UUID(token_id),
+                revoked_by=session.user_id,
+                reason=reason,
+            )
+            return success, None if success else "Token not found or already revoked"
+        finally:
+            await conn.close()
+
+    try:
+        success, error = asyncio.run(run_revoke())
+        if success:
+            if not quiet:
+                console.print("[green]✓[/green] Emergency access revoked")
+        else:
+            console.print(f"[red]Failed: {error}[/red]")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        if not isinstance(e, SystemExit):
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from None
+        raise
+
+
+@emergency_app.command("list")
+def emergency_list(
+    username: Annotated[
+        str | None, typer.Option("--username", "-u", help="Filter by username")
+    ] = None,
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """List active emergency access tokens.
+
+    HIPAA Citation: 45 CFR 164.312(a)(2)(ii) - REQUIRED specification
+    """
+    import json as json_module
+
+    from .auth import Authenticator, SessionStorage, UserManager
+    from .auth.emergency_access import EmergencyAccessManager
+
+    storage = SessionStorage()
+    token, _ = storage.load_token()
+
+    if not token:
+        console.print("[red]Not logged in. Use 'vcf-pg-loader auth login' first.[/red]")
+        raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_list():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            auth = Authenticator(jwt_secret=_get_jwt_secret())
+            session = await auth.validate_session(conn, token)
+            if not session:
+                return None, "Session expired"
+
+            user_id = None
+            if username:
+                user_manager = UserManager()
+                target_user = await user_manager.get_user_by_username(conn, username)
+                if not target_user:
+                    return None, f"User '{username}' not found"
+                user_id = target_user.user_id
+
+            manager = EmergencyAccessManager()
+            tokens = await manager.get_active_tokens(conn, user_id=user_id)
+            return tokens, None
+        finally:
+            await conn.close()
+
+    try:
+        tokens, error = asyncio.run(run_list())
+        if error:
+            console.print(f"[red]{error}[/red]")
+            raise typer.Exit(1)
+
+        if not tokens:
+            if not quiet:
+                console.print("[yellow]No active emergency tokens[/yellow]")
+            return
+
+        if json_output:
+            console.print(
+                json_module.dumps(
+                    [
+                        {
+                            "token_id": str(t.token_id),
+                            "user_id": t.user_id,
+                            "emergency_type": t.emergency_type.value,
+                            "granted_at": t.granted_at.isoformat(),
+                            "expires_at": t.expires_at.isoformat(),
+                            "minutes_remaining": t.minutes_remaining(),
+                            "requires_review": t.requires_review,
+                        }
+                        for t in tokens
+                    ],
+                    indent=2,
+                )
+            )
+        else:
+            if not quiet:
+                console.print(f"[bold]Active Emergency Tokens ({len(tokens)}):[/bold]")
+                for t in tokens:
+                    console.print(f"\n  Token: {t.token_id}")
+                    console.print(f"  User ID: {t.user_id}")
+                    console.print(f"  Type: {t.emergency_type.value}")
+                    console.print(f"  Expires: {t.expires_at.isoformat()}")
+                    console.print(f"  Minutes remaining: {t.minutes_remaining():.0f}")
+
+    except Exception as e:
+        if not isinstance(e, SystemExit):
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from None
+        raise
+
+
+@emergency_app.command("pending-reviews")
+def emergency_pending_reviews(
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """List emergency tokens pending post-incident review.
+
+    HIPAA Citation: 45 CFR 164.312(a)(2)(ii) - REQUIRED specification
+    """
+    import json as json_module
+
+    from .auth import Authenticator, SessionStorage
+    from .auth.emergency_access import EmergencyAccessManager
+
+    storage = SessionStorage()
+    token, _ = storage.load_token()
+
+    if not token:
+        console.print("[red]Not logged in. Use 'vcf-pg-loader auth login' first.[/red]")
+        raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_pending():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            auth = Authenticator(jwt_secret=_get_jwt_secret())
+            session = await auth.validate_session(conn, token)
+            if not session:
+                return None, "Session expired"
+
+            manager = EmergencyAccessManager()
+            pending = await manager.get_pending_reviews(conn)
+            return pending, None
+        finally:
+            await conn.close()
+
+    try:
+        pending, error = asyncio.run(run_pending())
+        if error:
+            console.print(f"[red]{error}[/red]")
+            raise typer.Exit(1)
+
+        if not pending:
+            if not quiet:
+                console.print("[green]No pending reviews[/green]")
+            return
+
+        if json_output:
+            console.print(json_module.dumps(pending, indent=2, default=str))
+        else:
+            if not quiet:
+                console.print(f"[bold]Pending Reviews ({len(pending)}):[/bold]")
+                for p in pending:
+                    console.print(f"\n  Token: {p['token_id']}")
+                    console.print(f"  User: {p.get('username', p['user_id'])}")
+                    console.print(f"  Type: {p['emergency_type']}")
+                    console.print(f"  Access count: {p.get('access_count', 0)}")
+
+    except Exception as e:
+        if not isinstance(e, SystemExit):
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from None
+        raise
+
+
+@emergency_app.command("complete-review")
+def emergency_complete_review(
+    token_id: Annotated[str, typer.Option("--token", "-t", prompt=True, help="Token ID to review")],
+    notes: Annotated[str, typer.Option("--notes", "-n", prompt=True, help="Review notes")],
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Complete post-incident review for emergency access.
+
+    HIPAA Citation: 45 CFR 164.312(a)(2)(ii) - REQUIRED specification
+    """
+    from .auth import Authenticator, SessionStorage
+    from .auth.emergency_access import EmergencyAccessManager
+
+    storage = SessionStorage()
+    token, _ = storage.load_token()
+
+    if not token:
+        console.print("[red]Not logged in. Use 'vcf-pg-loader auth login' first.[/red]")
+        raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_review():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            auth = Authenticator(jwt_secret=_get_jwt_secret())
+            session = await auth.validate_session(conn, token)
+            if not session:
+                return False, "Session expired"
+
+            manager = EmergencyAccessManager()
+            success = await manager.complete_review(
+                conn,
+                token_id=UUID(token_id),
+                reviewed_by=session.user_id,
+                review_notes=notes,
+            )
+            return success, None if success else "Token not found or already reviewed"
+        finally:
+            await conn.close()
+
+    try:
+        success, error = asyncio.run(run_review())
+        if success:
+            if not quiet:
+                console.print("[green]✓[/green] Review completed")
+        else:
+            console.print(f"[red]Failed: {error}[/red]")
             raise typer.Exit(1)
 
     except Exception as e:
@@ -3779,6 +4883,331 @@ def security_rotate_key(
                 console.print("3. Securely delete old key")
     except Exception as e:
         console.print(f"[red]Error during key rotation: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+encryption_app = typer.Typer(help="Database encryption key management (HIPAA 164.312(a)(2)(iv))")
+security_app.add_typer(encryption_app, name="encryption")
+
+
+@encryption_app.command("init")
+def encryption_init(
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """Initialize encryption schema.
+
+    Creates encryption_keys, encryption_key_rotations, and encrypted_data_registry
+    tables for managing database encryption keys.
+
+    \b
+    HIPAA Reference: 164.312(a)(2)(iv) - Encryption and Decryption
+    """
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        console.print("[red]Error: Database connection required[/red]")
+        raise typer.Exit(1)
+
+    async def run():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            from .security import SecuritySchemaManager
+
+            manager = SecuritySchemaManager()
+            await manager.create_encryption_schema(conn)
+            console.print("[green]✓[/green] Encryption schema initialized")
+        finally:
+            await conn.close()
+
+    asyncio.run(run())
+
+
+@encryption_app.command("create-key")
+def encryption_create_key(
+    name: Annotated[str, typer.Argument(help="Key name (must be unique)")],
+    purpose: Annotated[
+        str,
+        typer.Option(
+            "--purpose",
+            "-p",
+            help="Key purpose: data_encryption, phi_encryption, backup_encryption, transport_encryption",
+        ),
+    ] = "data_encryption",
+    expires_days: Annotated[
+        int | None, typer.Option("--expires", "-e", help="Key expiration in days")
+    ] = None,
+    user_id: Annotated[int | None, typer.Option("--user-id", "-u", help="Creating user ID")] = None,
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    json_output: bool = typer.Option(False, "--json", "-j", help="Output as JSON"),
+) -> None:
+    """Create a new database encryption key.
+
+    Keys are stored encrypted with the master key (VCF_PG_LOADER_MASTER_KEY).
+    The master key must be set before creating keys.
+
+    \b
+    HIPAA Reference: 164.312(a)(2)(iv) - Encryption and Decryption
+    NIST SP 800-111 - Guide to Storage Encryption Technologies
+    """
+    import json as json_module
+
+    from .security import EncryptionManager
+    from .security.encryption import KeyPurpose
+
+    try:
+        key_purpose = KeyPurpose(purpose)
+    except ValueError:
+        valid = [p.value for p in KeyPurpose]
+        console.print(f"[red]Error: Invalid purpose. Valid options: {valid}[/red]")
+        raise typer.Exit(1) from None
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        console.print("[red]Error: Database connection required[/red]")
+        raise typer.Exit(1)
+
+    try:
+        manager = EncryptionManager()
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        console.print(
+            "Set VCF_PG_LOADER_MASTER_KEY environment variable (base64-encoded 256-bit key)"
+        )
+        raise typer.Exit(1) from None
+
+    async def run():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            key = await manager.create_key(
+                conn,
+                key_name=name,
+                purpose=key_purpose,
+                expires_days=expires_days,
+                created_by=user_id,
+            )
+            return key
+        finally:
+            await conn.close()
+
+    try:
+        key = asyncio.run(run())
+        if json_output:
+            output = {
+                "key_id": str(key.key_id),
+                "key_name": key.key_name,
+                "key_version": key.key_version,
+                "purpose": key.purpose.value,
+                "expires_at": key.expires_at.isoformat() if key.expires_at else None,
+                "created_at": key.created_at.isoformat(),
+            }
+            console.print(json_module.dumps(output, indent=2))
+        else:
+            console.print("[green]✓[/green] Encryption key created")
+            console.print(f"  Key ID: {key.key_id}")
+            console.print(f"  Name: {key.key_name}")
+            console.print(f"  Version: {key.key_version}")
+            console.print(f"  Purpose: {key.purpose.value}")
+            if key.expires_at:
+                console.print(f"  Expires: {key.expires_at.isoformat()}")
+    except Exception as e:
+        console.print(f"[red]Error creating key: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@encryption_app.command("list-keys")
+def encryption_list_keys(
+    purpose: Annotated[
+        str | None,
+        typer.Option("--purpose", "-p", help="Filter by purpose"),
+    ] = None,
+    include_retired: bool = typer.Option(False, "--include-retired", help="Include retired keys"),
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    json_output: bool = typer.Option(False, "--json", "-j", help="Output as JSON"),
+) -> None:
+    """List database encryption keys.
+
+    Shows all encryption keys managed by the system.
+
+    \b
+    HIPAA Reference: 164.312(a)(2)(iv) - Encryption and Decryption
+    """
+    import json as json_module
+
+    from .security import EncryptionManager
+    from .security.encryption import KeyPurpose
+
+    key_purpose = None
+    if purpose:
+        try:
+            key_purpose = KeyPurpose(purpose)
+        except ValueError:
+            valid = [p.value for p in KeyPurpose]
+            console.print(f"[red]Error: Invalid purpose. Valid options: {valid}[/red]")
+            raise typer.Exit(1) from None
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        console.print("[red]Error: Database connection required[/red]")
+        raise typer.Exit(1)
+
+    try:
+        manager = EncryptionManager()
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        console.print(
+            "Set VCF_PG_LOADER_MASTER_KEY environment variable (base64-encoded 256-bit key)"
+        )
+        raise typer.Exit(1) from None
+
+    async def run():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            return await manager.list_keys(
+                conn,
+                purpose=key_purpose,
+                include_retired=include_retired,
+            )
+        finally:
+            await conn.close()
+
+    try:
+        keys = asyncio.run(run())
+        if json_output:
+            output = []
+            for key in keys:
+                output.append(
+                    {
+                        "key_id": str(key.key_id),
+                        "key_name": key.key_name,
+                        "key_version": key.key_version,
+                        "purpose": key.purpose.value,
+                        "is_active": key.is_active,
+                        "expires_at": key.expires_at.isoformat() if key.expires_at else None,
+                        "retired_at": key.retired_at.isoformat() if key.retired_at else None,
+                        "use_count": key.use_count,
+                        "created_at": key.created_at.isoformat(),
+                    }
+                )
+            console.print(json_module.dumps(output, indent=2))
+        else:
+            if not keys:
+                console.print("[yellow]No encryption keys found[/yellow]")
+                return
+
+            console.print("[bold]Encryption Keys[/bold]")
+            console.print()
+            for key in keys:
+                status = "[green]active[/green]" if key.is_active else "[dim]inactive[/dim]"
+                if key.retired_at:
+                    status = "[red]retired[/red]"
+                console.print(f"  {key.key_name} (v{key.key_version}) [{status}]")
+                console.print(f"    ID: {key.key_id}")
+                console.print(f"    Purpose: {key.purpose.value}")
+                console.print(f"    Uses: {key.use_count}")
+                if key.expires_at:
+                    console.print(f"    Expires: {key.expires_at.isoformat()}")
+                console.print()
+    except Exception as e:
+        console.print(f"[red]Error listing keys: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@encryption_app.command("rotate")
+def encryption_rotate_key(
+    name: Annotated[str, typer.Argument(help="Key name to rotate")],
+    reason: Annotated[str, typer.Option("--reason", "-r", help="Reason for rotation")] = None,
+    user_id: Annotated[
+        int, typer.Option("--user-id", "-u", help="User ID performing rotation")
+    ] = None,
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    json_output: bool = typer.Option(False, "--json", "-j", help="Output as JSON"),
+) -> None:
+    """Rotate a database encryption key.
+
+    Creates a new version of the key, retiring the old version.
+    Existing data encrypted with the old key can still be decrypted.
+
+    \b
+    HIPAA Reference: 164.312(a)(2)(iv) - Encryption and Decryption
+    NIST SP 800-57 - Key Management Guidelines
+    """
+    import json as json_module
+
+    from .security import EncryptionManager
+
+    if not reason:
+        console.print("[red]Error: --reason is required for audit trail[/red]")
+        raise typer.Exit(1)
+
+    if not user_id:
+        console.print("[red]Error: --user-id is required[/red]")
+        raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        console.print("[red]Error: Database connection required[/red]")
+        raise typer.Exit(1)
+
+    try:
+        manager = EncryptionManager()
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        console.print(
+            "Set VCF_PG_LOADER_MASTER_KEY environment variable (base64-encoded 256-bit key)"
+        )
+        raise typer.Exit(1) from None
+
+    async def run():
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            return await manager.rotate_key(
+                conn,
+                key_name=name,
+                rotated_by=user_id,
+                reason=reason,
+            )
+        finally:
+            await conn.close()
+
+    try:
+        key = asyncio.run(run())
+        if json_output:
+            output = {
+                "key_id": str(key.key_id),
+                "key_name": key.key_name,
+                "key_version": key.key_version,
+                "purpose": key.purpose.value,
+                "expires_at": key.expires_at.isoformat() if key.expires_at else None,
+                "created_at": key.created_at.isoformat(),
+            }
+            console.print(json_module.dumps(output, indent=2))
+        else:
+            console.print("[green]✓[/green] Encryption key rotated")
+            console.print(f"  Key ID: {key.key_id}")
+            console.print(f"  Name: {key.key_name}")
+            console.print(f"  New Version: {key.key_version}")
+            console.print(f"  Purpose: {key.purpose.value}")
+    except Exception as e:
+        console.print(f"[red]Error rotating key: {e}[/red]")
         raise typer.Exit(1) from None
 
 
