@@ -16,11 +16,24 @@ from vcf_pg_loader.compliance import (
 @pytest.mark.integration
 class TestComplianceValidatorIntegration:
     @pytest.fixture
+    async def empty_db(self, postgres_container):
+        """Create a database connection without any schema."""
+        import asyncpg
+
+        url = postgres_container.get_connection_url()
+        if url.startswith("postgresql+psycopg2://"):
+            url = url.replace("postgresql+psycopg2://", "postgresql://")
+
+        conn = await asyncpg.connect(url)
+        yield conn
+        await conn.close()
+
+    @pytest.fixture
     async def compliance_db(self, test_db):
         yield test_db
 
-    async def test_run_all_checks_with_empty_db(self, compliance_db):
-        validator = ComplianceValidator(compliance_db)
+    async def test_run_all_checks_with_empty_db(self, empty_db):
+        validator = ComplianceValidator(empty_db)
         report = await validator.run_all_checks()
 
         assert isinstance(report, ComplianceReport)
@@ -28,8 +41,8 @@ class TestComplianceValidatorIntegration:
         failed = [r for r in report.results if r.status == ComplianceStatus.FAIL]
         assert len(failed) > 0
 
-    async def test_audit_check_fails_without_schema(self, compliance_db):
-        validator = ComplianceValidator(compliance_db)
+    async def test_audit_check_fails_without_schema(self, empty_db):
+        validator = ComplianceValidator(empty_db)
         result = await validator.check_audit_logging()
 
         assert result.status == ComplianceStatus.FAIL
@@ -45,33 +58,33 @@ class TestComplianceValidatorIntegration:
 
         assert result.status == ComplianceStatus.PASS
 
-    async def test_auth_check_fails_without_schema(self, compliance_db):
-        validator = ComplianceValidator(compliance_db)
+    async def test_auth_check_fails_without_schema(self, empty_db):
+        validator = ComplianceValidator(empty_db)
         result = await validator.check_authentication()
 
         assert result.status == ComplianceStatus.FAIL
 
-    async def test_auth_check_passes_with_schema(self, compliance_db):
+    async def test_auth_check_passes_with_schema(self, empty_db):
         auth_schema = AuthSchemaManager()
-        await auth_schema.create_auth_schema(compliance_db)
+        await auth_schema.create_auth_schema(empty_db)
 
-        validator = ComplianceValidator(compliance_db)
+        validator = ComplianceValidator(empty_db)
         result = await validator.check_authentication()
 
         assert result.status in (ComplianceStatus.PASS, ComplianceStatus.WARN)
 
-    async def test_immutability_check_fails_without_trigger(self, compliance_db):
-        validator = ComplianceValidator(compliance_db)
+    async def test_immutability_check_fails_without_trigger(self, empty_db):
+        validator = ComplianceValidator(empty_db)
         result = await validator.check_audit_immutability()
 
         assert result.status == ComplianceStatus.FAIL
 
-    async def test_immutability_check_passes_with_trigger(self, compliance_db):
+    async def test_immutability_check_passes_with_trigger(self, empty_db):
         schema_manager = AuditSchemaManager()
-        await schema_manager.create_audit_schema(compliance_db)
-        await schema_manager.create_initial_partitions(compliance_db, months_ahead=1)
+        await schema_manager.create_audit_schema(empty_db)
+        await schema_manager.create_initial_partitions(empty_db, months_ahead=1)
 
-        validator = ComplianceValidator(compliance_db)
+        validator = ComplianceValidator(empty_db)
         result = await validator.check_audit_immutability()
 
         assert result.status == ComplianceStatus.PASS
@@ -80,15 +93,26 @@ class TestComplianceValidatorIntegration:
 @pytest.mark.integration
 class TestComplianceReportIntegration:
     @pytest.fixture
-    async def full_compliance_db(self, test_db):
+    async def full_compliance_db(self, postgres_container):
+        """Create a database with full compliance schemas."""
+        import asyncpg
+
+        url = postgres_container.get_connection_url()
+        if url.startswith("postgresql+psycopg2://"):
+            url = url.replace("postgresql+psycopg2://", "postgresql://")
+
+        conn = await asyncpg.connect(url)
+
         audit_schema = AuditSchemaManager()
-        await audit_schema.create_audit_schema(test_db)
-        await audit_schema.create_initial_partitions(test_db, months_ahead=1)
+        await audit_schema.create_audit_schema(conn)
+        await audit_schema.create_initial_partitions(conn, months_ahead=1)
 
         auth_schema = AuthSchemaManager()
-        await auth_schema.create_auth_schema(test_db)
+        await auth_schema.create_auth_schema(conn)
 
-        yield test_db
+        yield conn
+
+        await conn.close()
 
     async def test_generate_json_report(self, full_compliance_db):
         validator = ComplianceValidator(full_compliance_db)
