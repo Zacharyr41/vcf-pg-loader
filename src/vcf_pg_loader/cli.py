@@ -202,6 +202,9 @@ def _resolve_database_url(
             console.print("[dim]Using database from CLI args/environment variables[/dim]")
         return built_url
 
+    if os.environ.get("VCF_PG_LOADER_NO_MANAGED_DB"):
+        return None
+
     try:
         db = ManagedDatabase()
 
