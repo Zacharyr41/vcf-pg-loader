@@ -13,14 +13,23 @@ from vcf_pg_loader.compliance import (
 )
 
 
+@pytest.fixture(scope="function")
+def isolated_postgres_container():
+    """Create an isolated PostgreSQL container for compliance tests."""
+    from testcontainers.postgres import PostgresContainer
+
+    with PostgresContainer("postgres:15") as postgres:
+        yield postgres
+
+
 @pytest.mark.integration
 class TestComplianceValidatorIntegration:
     @pytest.fixture
-    async def empty_db(self, postgres_container):
+    async def empty_db(self, isolated_postgres_container):
         """Create a database connection without any schema."""
         import asyncpg
 
-        url = postgres_container.get_connection_url()
+        url = isolated_postgres_container.get_connection_url()
         if url.startswith("postgresql+psycopg2://"):
             url = url.replace("postgresql+psycopg2://", "postgresql://")
 
@@ -93,11 +102,11 @@ class TestComplianceValidatorIntegration:
 @pytest.mark.integration
 class TestComplianceReportIntegration:
     @pytest.fixture
-    async def full_compliance_db(self, postgres_container):
+    async def full_compliance_db(self, isolated_postgres_container):
         """Create a database with full compliance schemas."""
         import asyncpg
 
-        url = postgres_container.get_connection_url()
+        url = isolated_postgres_container.get_connection_url()
         if url.startswith("postgresql+psycopg2://"):
             url = url.replace("postgresql+psycopg2://", "postgresql://")
 

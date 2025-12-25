@@ -2,13 +2,55 @@
 
 import sys
 from pathlib import Path
+from urllib.parse import urlparse, urlunparse
 
 import pytest
 
+
+def parse_db_credentials(url: str) -> tuple[str, str]:
+    """Parse database URL into password-less URL and password.
+
+    For HIPAA compliance, CLI tests must pass password via environment variable.
+    This helper extracts the password and returns a URL without it.
+
+    Args:
+        url: Full database connection URL with embedded password.
+
+    Returns:
+        Tuple of (password_less_url, password).
+    """
+    if url.startswith("postgresql+psycopg2://"):
+        url = url.replace("postgresql+psycopg2://", "postgresql://")
+
+    parsed = urlparse(url)
+    password = parsed.password or ""
+
+    if parsed.username:
+        netloc = f"{parsed.username}@{parsed.hostname}"
+    else:
+        netloc = parsed.hostname or ""
+
+    if parsed.port:
+        netloc = f"{netloc}:{parsed.port}"
+
+    password_less_url = urlunparse(
+        (
+            parsed.scheme,
+            netloc,
+            parsed.path,
+            parsed.params,
+            parsed.query,
+            parsed.fragment,
+        )
+    )
+
+    return password_less_url, password
+
+
 sys.path.insert(0, str(Path(__file__).parent))
 
-from fixtures.nf_core_datasets import GIABDataManager
-from fixtures.vcf_generator import (
+from fixtures.nf_core_datasets import GIABDataManager  # noqa: E402
+from fixtures.vcf_generator import (  # noqa: E402
     SyntheticVariant,
     VCFGenerator,
     make_genmod_vcf_file,
@@ -20,6 +62,7 @@ from fixtures.vcf_generator import (
 
 try:
     from testcontainers.postgres import PostgresContainer
+
     HAS_TESTCONTAINERS = True
 except ImportError:
     HAS_TESTCONTAINERS = False
@@ -98,6 +141,7 @@ def vcf_generator():
 @pytest.fixture
 def synthetic_variant_factory():
     """Factory for creating SyntheticVariant instances."""
+
     def _factory(**kwargs):
         defaults = {
             "chrom": "chr1",
@@ -107,6 +151,7 @@ def synthetic_variant_factory():
         }
         defaults.update(kwargs)
         return SyntheticVariant(**defaults)
+
     return _factory
 
 
@@ -200,24 +245,12 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')"
     )
-    config.addinivalue_line(
-        "markers", "integration: marks tests requiring database"
-    )
-    config.addinivalue_line(
-        "markers", "acceptance: marks acceptance tests"
-    )
-    config.addinivalue_line(
-        "markers", "nf_core: marks tests requiring nf-core test data"
-    )
-    config.addinivalue_line(
-        "markers", "performance: marks performance benchmark tests"
-    )
-    config.addinivalue_line(
-        "markers", "validation: marks validation tests"
-    )
-    config.addinivalue_line(
-        "markers", "giab: marks tests requiring GIAB benchmark data"
-    )
+    config.addinivalue_line("markers", "integration: marks tests requiring database")
+    config.addinivalue_line("markers", "acceptance: marks acceptance tests")
+    config.addinivalue_line("markers", "nf_core: marks tests requiring nf-core test data")
+    config.addinivalue_line("markers", "performance: marks performance benchmark tests")
+    config.addinivalue_line("markers", "validation: marks validation tests")
+    config.addinivalue_line("markers", "giab: marks tests requiring GIAB benchmark data")
     config.addinivalue_line(
         "markers", "giab_full: marks tests requiring full GIAB files (~4M variants each)"
     )

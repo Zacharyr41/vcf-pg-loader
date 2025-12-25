@@ -446,6 +446,9 @@ def validate(
     db_url: str = typer.Option(
         "postgresql://localhost/variants", "--db", "-d", help="PostgreSQL connection URL"
     ),
+    require_tls: bool = typer.Option(
+        True, "--require-tls/--no-require-tls", help="Require TLS for database connections"
+    ),
 ) -> None:
     """Validate a completed load."""
     try:
@@ -454,8 +457,16 @@ def validate(
         console.print(f"[red]Error: Invalid UUID format: {load_batch_id}[/red]")
         raise typer.Exit(1) from None
 
+    resolved_db_url = _resolve_database_url(db_url, quiet=False)
+    if not resolved_db_url:
+        console.print("[red]Error: Could not resolve database URL[/red]")
+        raise typer.Exit(1)
+
+    global _default_tls_config
+    _default_tls_config = TLSConfig(require_tls=require_tls)
+
     async def run_validation() -> None:
-        conn = await asyncpg.connect(db_url, ssl=_get_ssl_param())
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
 
         try:
             audit = await conn.fetchrow(
@@ -514,6 +525,9 @@ def init_db(
         True, "--human-genome/--no-human-genome", help="Use human chromosome enum type"
     ),
     skip_audit: bool = typer.Option(False, "--skip-audit", help="Skip HIPAA audit schema creation"),
+    require_tls: bool = typer.Option(
+        True, "--require-tls/--no-require-tls", help="Require TLS for database connections"
+    ),
 ) -> None:
     """Initialize database schema.
 
@@ -523,9 +537,16 @@ def init_db(
     - Samples table
     - HIPAA-compliant audit logging (unless --skip-audit)
     """
+    resolved_db_url = _resolve_database_url(db_url, quiet=False)
+    if not resolved_db_url:
+        console.print("[red]Error: Could not resolve database URL[/red]")
+        raise typer.Exit(1)
+
+    global _default_tls_config
+    _default_tls_config = TLSConfig(require_tls=require_tls)
 
     async def run_init() -> None:
-        conn = await asyncpg.connect(db_url, ssl=_get_ssl_param())
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
 
         try:
             schema_manager = SchemaManager(human_genome=human_genome)
