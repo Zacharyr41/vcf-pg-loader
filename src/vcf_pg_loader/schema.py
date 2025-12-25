@@ -3,6 +3,7 @@
 import asyncpg
 
 from .audit.schema import AuditSchemaManager
+from .auth.schema import AuthSchemaManager
 from .data.schema import DisposalSchemaManager
 from .phi.schema import PHISchemaManager
 
@@ -41,6 +42,7 @@ class SchemaManager:
     def __init__(self, human_genome: bool = True):
         self.human_genome = human_genome
         self._audit_manager = AuditSchemaManager()
+        self._auth_manager = AuthSchemaManager()
         self._phi_manager = PHISchemaManager()
         self._disposal_manager = DisposalSchemaManager()
 
@@ -54,6 +56,7 @@ class SchemaManager:
         await self.create_samples_table(conn)
         await self.create_hipaa_audit_schema(conn)
         await self.create_phi_vault_schema(conn)
+        await self.create_auth_schema(conn)
         await self.create_disposal_schema(conn)
 
     async def drop_schema(self, conn: asyncpg.Connection) -> None:
@@ -332,6 +335,16 @@ class SchemaManager:
     async def get_phi_stats(self, conn: asyncpg.Connection) -> dict:
         """Get PHI vault statistics."""
         return await self._phi_manager.get_mapping_stats(conn)
+
+    async def create_auth_schema(self, conn: asyncpg.Connection) -> None:
+        """Create authentication schema with users table.
+
+        Creates tables for:
+        - User accounts
+        - Sessions
+        - Password history
+        """
+        await self._auth_manager.create_auth_schema(conn)
 
     async def create_disposal_schema(self, conn: asyncpg.Connection) -> None:
         """Create disposal tracking schema.
