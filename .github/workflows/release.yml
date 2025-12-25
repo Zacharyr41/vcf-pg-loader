@@ -17,6 +17,11 @@ on:
         required: false
         type: boolean
         default: false
+      create_nfcore_pr:
+        description: 'Create PR to nf-core/modules (requires NF_CORE_PAT)'
+        required: false
+        type: boolean
+        default: false
       dry_run:
         description: 'Dry run (build but do not publish)'
         required: false
@@ -36,6 +41,9 @@ jobs:
           fi
           echo "Version $VERSION is valid"
 
+  # =============================================================================
+  # VERSION BUMP AND TAGGING
+  # =============================================================================
   bump-and-tag:
     needs: validate-version
     runs-on: ubuntu-latest
@@ -76,6 +84,60 @@ jobs:
           git log -1 --oneline
           git tag -l "v${{ inputs.version }}"
 
+  # =============================================================================
+  # NF-CORE MODULE VERSION VERIFICATION
+  # Sanity check that bump-my-version correctly updated nf-core module files.
+  # Versions in main.nf (container tag) and environment.yml (bioconda package)
+  # are updated by bump-my-version, NOT by this job.
+  # =============================================================================
+  verify-nfcore-module-versions:
+    needs: bump-and-tag
+    if: ${{ !inputs.skip_nfcore }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ inputs.version }}
+        if: ${{ !inputs.dry_run }}
+
+      - uses: actions/checkout@v4
+        if: ${{ inputs.dry_run }}
+
+      - name: Verify nf-core module versions match release
+        run: |
+          VERSION="${{ inputs.version }}"
+          echo "Verifying nf-core module files contain version $VERSION"
+
+          # Check container tag in main.nf
+          MAIN_NF="nf-core/modules/vcfpgloader/load/main.nf"
+          if grep -q "ghcr.io/zacharyr41/vcf-pg-loader:${VERSION}" "$MAIN_NF"; then
+            echo "✓ main.nf container tag matches v${VERSION}"
+          else
+            echo "::error::main.nf container tag does not match version ${VERSION}"
+            echo "Expected: ghcr.io/zacharyr41/vcf-pg-loader:${VERSION}"
+            echo "Found:"
+            grep -o 'ghcr.io/zacharyr41/vcf-pg-loader:[0-9.]*' "$MAIN_NF" || echo "  (no match found)"
+            exit 1
+          fi
+
+          # Check bioconda package in environment.yml
+          ENV_YML="nf-core/modules/vcfpgloader/load/environment.yml"
+          if grep -q "bioconda::vcf-pg-loader=${VERSION}" "$ENV_YML"; then
+            echo "✓ environment.yml bioconda package matches v${VERSION}"
+          else
+            echo "::error::environment.yml bioconda package does not match version ${VERSION}"
+            echo "Expected: bioconda::vcf-pg-loader=${VERSION}"
+            echo "Found:"
+            grep -o 'bioconda::vcf-pg-loader=[0-9.]*' "$ENV_YML" || echo "  (no match found)"
+            exit 1
+          fi
+
+          echo ""
+          echo "All nf-core module version checks passed!"
+
+  # =============================================================================
+  # BUILD AND PUBLISH
+  # =============================================================================
   build:
     needs: bump-and-tag
     runs-on: ubuntu-latest
@@ -302,3 +364,100 @@ jobs:
             🤖 This issue was automatically created by the release workflow.`,
               labels: ['bioconda', 'release']
             });
+
+  # =============================================================================
+  # NF-CORE MODULES PR (OPTIONAL)
+  # Creates a PR to nf-core/modules with the updated vcfpgloader module.
+  #
+  # IMPORTANT: This job runs AFTER bioconda-pr because:
+  # 1. BioConda must be published first - nf-core modules use BioContainers
+  # 2. BioContainers automatically builds from BioConda packages (~30 min after merge)
+  # 3. The nf-core PR is optional and may require manual adjustments per nf-core guidelines
+  #
+  # NOTE: Version updates to main.nf and environment.yml are handled by
+  # bump-my-version in the bump-and-tag job, NOT by this job.
+  # =============================================================================
+  nfcore-modules-pr:
+    needs: bioconda-pr
+    if: ${{ !inputs.skip_nfcore && inputs.create_nfcore_pr }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    outputs:
+      pr_url: ${{ steps.create-pr.outputs.pull-request-url }}
+    steps:
+      - name: Checkout this repository
+        uses: actions/checkout@v4
+        with:
+          ref: v${{ inputs.version }}
+
+      - name: Checkout nf-core/modules fork
+        uses: actions/checkout@v4
+        with:
+          repository: Zacharyr41/nf-core-modules
+          token: ${{ secrets.NF_CORE_PAT }}
+          path: nf-core-modules-fork
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          cd nf-core-modules-fork
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream and create branch
+        run: |
+          cd nf-core-modules-fork
+          git remote add upstream https://github.com/nf-core/modules.git || true
+          git fetch upstream master
+          git checkout -B update-vcfpgloader-${{ inputs.version }} upstream/master
+
+      - name: Copy updated module files
+        run: |
+          mkdir -p nf-core-modules-fork/modules/nf-core/vcfpgloader/load
+          cp -r nf-core/modules/vcfpgloader/load/* nf-core-modules-fork/modules/nf-core/vcfpgloader/load/
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install nf-core tools and lint
+        continue-on-error: true
+        run: |
+          pip install nf-core
+          cd nf-core-modules-fork
+          nf-core modules lint vcfpgloader/load || echo "::warning::nf-core lint reported issues - review may be needed"
+
+      - name: Create Pull Request
+        id: create-pr
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.NF_CORE_PAT }}
+          path: nf-core-modules-fork
+          push-to-fork: Zacharyr41/nf-core-modules
+          branch: update-vcfpgloader-${{ inputs.version }}
+          base: master
+          title: "Update vcfpgloader module to ${{ inputs.version }}"
+          body: |
+            ## Summary
+
+            Updates the `vcfpgloader/load` module to version `${{ inputs.version }}`.
+
+            ### Changes
+            - Updated container tag to `ghcr.io/zacharyr41/vcf-pg-loader:${{ inputs.version }}`
+            - Updated bioconda package to `vcf-pg-loader=${{ inputs.version }}`
+
+            ### References
+            - **PyPI**: https://pypi.org/project/vcf-pg-loader/${{ inputs.version }}/
+            - **GitHub Release**: https://github.com/${{ github.repository }}/releases/tag/v${{ inputs.version }}
+            - **BioConda Recipe**: https://github.com/bioconda/bioconda-recipes/tree/master/recipes/vcf-pg-loader
+
+            ---
+            🤖 This PR was automatically generated by the vcf-pg-loader release workflow.
+
+      - name: Report PR URL
+        if: steps.create-pr.outputs.pull-request-url != ''
+        run: |
+          echo "## nf-core Modules PR Created" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "PR: ${{ steps.create-pr.outputs.pull-request-url }}" >> $GITHUB_STEP_SUMMARY
