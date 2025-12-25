@@ -9,8 +9,19 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./docker/certs:/var/lib/postgresql/certs:ro
+      - ./docker/postgres/conf.d:/etc/postgresql/conf.d:ro
+      - ./docker/postgres/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+    command:
+      - postgres
+      - -c
+      - config_file=/etc/postgresql/postgresql.conf
+      - -c
+      - hba_file=/etc/postgresql/pg_hba.conf
+      - -c
+      - include_dir=/etc/postgresql/conf.d
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U vcfloader -d variants"]
+      test: ["CMD-SHELL", "pg_isready -U vcfloader -d variants && psql -U vcfloader -d variants -c 'SHOW ssl' | grep -q on"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -21,9 +32,12 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://vcfloader:vcfloader@postgres:5432/variants
+      DATABASE_URL: postgresql://vcfloader:vcfloader@postgres:5432/variants?sslmode=require
+      VCF_PG_LOADER_REQUIRE_TLS: "true"
+      VCF_PG_LOADER_TLS_CA_CERT: /certs/ca.crt
     volumes:
       - ./data:/data:ro
+      - ./docker/certs:/certs:ro
     entrypoint: ["vcf-pg-loader"]
     command: ["--help"]
 

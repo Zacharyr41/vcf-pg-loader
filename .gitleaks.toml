@@ -1,0 +1,9 @@
+[extend]
+useDefault = true
+
+[allowlist]
+paths = [
+    '''docs/deployment/aws-rds-encryption\.md$''',
+    '''\.gitleaks\.toml$''',
+    '''docker/certs/.*\.key$''',
+]
