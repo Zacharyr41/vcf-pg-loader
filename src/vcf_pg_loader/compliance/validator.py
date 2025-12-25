@@ -151,7 +151,7 @@ class ComplianceValidator:
             """
             SELECT EXISTS (
                 SELECT 1 FROM information_schema.tables
-                WHERE table_name = 'hipaa_users'
+                WHERE table_name = 'users'
             )
             """
         )
@@ -164,7 +164,7 @@ class ComplianceValidator:
                 remediation="Run 'vcf-pg-loader auth init' to create authentication schema",
             )
 
-        has_users = await self.conn.fetchval("SELECT EXISTS (SELECT 1 FROM hipaa_users)")
+        has_users = await self.conn.fetchval("SELECT EXISTS (SELECT 1 FROM users)")
 
         if not has_users:
             return CheckResult(
@@ -187,7 +187,7 @@ class ComplianceValidator:
             """
             SELECT EXISTS (
                 SELECT 1 FROM information_schema.tables
-                WHERE table_name = 'hipaa_roles'
+                WHERE table_name = 'roles'
             )
             """
         )
@@ -200,7 +200,7 @@ class ComplianceValidator:
                 remediation="Run 'vcf-pg-loader roles init' to create RBAC schema",
             )
 
-        role_count = await self.conn.fetchval("SELECT COUNT(*) FROM hipaa_roles")
+        role_count = await self.conn.fetchval("SELECT COUNT(*) FROM roles")
 
         if role_count == 0:
             return CheckResult(
@@ -287,6 +287,23 @@ class ComplianceValidator:
 
     async def check_password_policy(self) -> CheckResult:
         check = get_check_by_id("PASSWORD_POLICY")
+
+        table_exists = await self.conn.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.tables
+                WHERE table_name = 'password_policy'
+            )
+            """
+        )
+
+        if not table_exists:
+            return CheckResult(
+                check=check,
+                status=ComplianceStatus.FAIL,
+                message="No password policy configured",
+                remediation="Configure password policy in database settings",
+            )
 
         policy = await self.conn.fetchrow(
             """
