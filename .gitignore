@@ -211,3 +211,7 @@ __marimo__/
 
 # Test data cache (downloaded GIAB/nf-core files)
 test_data_cache/
+
+# TLS certificates (generated dynamically via scripts/generate-certs.sh)
+docker/certs/*.key
+docker/certs/*.crt

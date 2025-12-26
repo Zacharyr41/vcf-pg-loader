@@ -1,0 +1,2 @@
+# TLS certificates are generated dynamically.
+# Run: make certs (or ./scripts/generate-certs.sh)

@@ -29,13 +29,17 @@ class TestRunAllChecks(TestComplianceValidator):
     async def test_run_all_checks_returns_report(self, validator, mock_conn):
         mock_conn.get_settings.return_value = MagicMock(ssl=True)
         mock_conn.fetchval.return_value = True
-        mock_conn.fetchrow.return_value = {
-            "min_length": 12,
-            "require_uppercase": True,
-            "require_lowercase": True,
-            "require_digit": True,
-            "require_special": True,
-        }
+        mock_conn.fetchrow.side_effect = [
+            {
+                "min_length": 12,
+                "require_uppercase": True,
+                "require_lowercase": True,
+                "require_digit": True,
+                "require_special": True,
+            },
+            {"total_users": 1, "mfa_users": 1},
+            {"retention_years": 6, "enforce_minimum": True, "created_at": None},
+        ]
         mock_conn.fetch.return_value = []
 
         report = await validator.run_all_checks()
@@ -46,13 +50,17 @@ class TestRunAllChecks(TestComplianceValidator):
     async def test_run_all_checks_covers_all_registered_checks(self, validator, mock_conn):
         mock_conn.get_settings.return_value = MagicMock(ssl=True)
         mock_conn.fetchval.return_value = True
-        mock_conn.fetchrow.return_value = {
-            "min_length": 12,
-            "require_uppercase": True,
-            "require_lowercase": True,
-            "require_digit": True,
-            "require_special": True,
-        }
+        mock_conn.fetchrow.side_effect = [
+            {
+                "min_length": 12,
+                "require_uppercase": True,
+                "require_lowercase": True,
+                "require_digit": True,
+                "require_special": True,
+            },
+            {"total_users": 1, "mfa_users": 1},
+            {"retention_years": 6, "enforce_minimum": True, "created_at": None},
+        ]
         mock_conn.fetch.return_value = []
 
         report = await validator.run_all_checks()
@@ -187,12 +195,12 @@ class TestCheckEncryptionAtRest(TestComplianceValidator):
         assert result.status == ComplianceStatus.PASS
         assert result.check.id == "ENCRYPTION_AT_REST"
 
-    async def test_encryption_warn_when_not_configured(self, validator, mock_conn):
+    async def test_encryption_fail_when_not_configured(self, validator, mock_conn):
         mock_conn.fetchval.return_value = False
 
         result = await validator.check_encryption_at_rest()
 
-        assert result.status == ComplianceStatus.WARN
+        assert result.status == ComplianceStatus.FAIL
 
 
 class TestCheckSessionTimeout(TestComplianceValidator):
