@@ -1,4 +1,4 @@
-.PHONY: help dev-up dev-down dev-restart dev-logs install test lint format clean test-data test-data-download test-data-clone test-data-status deps version-check release-check nf-core-lint nf-core-diff nf-core-create-branch nf-core-update-branch nf-core-status
+.PHONY: help certs dev-up dev-down dev-restart dev-logs install test lint format clean test-data test-data-download test-data-clone test-data-status deps version-check release-check nf-core-lint nf-core-diff nf-core-create-branch nf-core-update-branch nf-core-status
 
 help: ## Show this help message
 	@echo "Available commands:"
@@ -14,7 +14,10 @@ deps: ## Install system dependencies (bcftools)
 		echo "Install bcftools manually: apt-get install bcftools or conda install -c bioconda bcftools"; \
 	fi
 
-dev-up: ## Start development database
+certs: ## Generate TLS certificates for development
+	@./scripts/generate-certs.sh
+
+dev-up: certs ## Start development database
 	@if command -v docker >/dev/null 2>&1; then \
 		if command -v docker-compose >/dev/null 2>&1; then \
 			cd docker && docker-compose up -d; \
