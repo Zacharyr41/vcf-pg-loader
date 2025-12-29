@@ -154,6 +154,7 @@ Options:
   --quiet, -q                     Suppress non-error output
   --progress/--no-progress        Show progress bar [default: progress]
   --force, -f                     Force reload even if file was already loaded
+  --hipaa-mode/--no-hipaa-mode    Enable/disable HIPAA compliance features [default: enabled]
 ```
 
 When `--db` is omitted, vcf-pg-loader automatically uses a managed PostgreSQL container.
@@ -161,6 +162,17 @@ When `--db` is omitted, vcf-pg-loader automatically uses a managed PostgreSQL co
 **Normalization**: When enabled (default), variants are left-aligned and trimmed following the vt algorithm. This ensures consistent representation across different variant callers.
 
 **Genome Type**: Human genome mode uses a PostgreSQL enum for chromosomes (chr1-22, X, Y, M) which provides validation and efficient storage. Non-human mode uses TEXT to support arbitrary chromosome/contig names.
+
+**HIPAA Mode**: By default, vcf-pg-loader runs with HIPAA compliance features enabled:
+- TLS required for database connections
+- Sample ID anonymization
+- VCF header sanitization to remove PHI
+
+For local development without PHI, use `--no-hipaa-mode` to disable all compliance features:
+
+```bash
+vcf-pg-loader load sample.vcf.gz --no-hipaa-mode
+```
 
 ### `validate`
 

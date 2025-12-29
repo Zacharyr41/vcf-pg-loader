@@ -299,6 +299,14 @@ def load(
     fail_on_phi: bool = typer.Option(
         False, "--fail-on-phi", help="Fail if PHI is detected during scan"
     ),
+    hipaa_mode: Annotated[
+        bool | None,
+        typer.Option(
+            "--hipaa-mode/--no-hipaa-mode",
+            help="Enable/disable all HIPAA compliance features (TLS, anonymization, header sanitization). "
+            "Default: enabled. Use --no-hipaa-mode for local development.",
+        ),
+    ] = None,
 ) -> None:
     """Load a VCF file into PostgreSQL.
 
@@ -307,6 +315,15 @@ def load(
     Can also specify connection via --host, --port, --database, --user options.
     """
     setup_logging(verbose, quiet)
+
+    if hipaa_mode is False:
+        require_tls = False
+        anonymize = False
+        sanitize_headers = False
+        if not quiet:
+            console.print(
+                "[yellow]⚠ HIPAA mode disabled - not for production use with PHI[/yellow]"
+            )
 
     if not vcf_path.exists():
         console.print(f"[red]Error: VCF file not found: {vcf_path}[/red]")
