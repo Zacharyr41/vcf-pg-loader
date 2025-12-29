@@ -63,26 +63,80 @@ cd vcf-pg-loader
 uv pip install -e ".[dev]"
 ```
 
-### Nextflow Module
+### nf-core Module
 
-For use in Nextflow pipelines, the `vcfpgloader/load` module is available:
+The `vcfpgloader/load` module is available in [nf-core/modules](https://github.com/nf-core/modules) for use in Nextflow pipelines.
+
+#### Installation
+
+```bash
+nf-core modules install vcfpgloader/load
+```
+
+#### Usage
 
 ```nextflow
-include { VCFPGLOADER } from './modules/local/vcfpgloader/load/main'
+include { VCFPGLOADER_LOAD } from '../modules/nf-core/vcfpgloader/load/main'
 
 workflow {
-    VCFPGLOADER(
-        ch_vcf,           // tuple val(meta), path(vcf), path(tbi)
-        params.db_host,
-        params.db_port,
-        params.db_name,
-        params.db_user,
-        params.db_schema
-    )
+    ch_input = Channel.of([
+        [ id: 'sample1', family: 'FAM001' ],  // meta map
+        file('sample1.vcf.gz'),                // vcf
+        file('sample1.vcf.gz.tbi'),            // tbi
+        'localhost',                           // db_host
+        5432,                                  // db_port
+        'variants_db',                         // db_name
+        'postgres',                            // db_user
+        'public'                               // db_schema
+    ])
+
+    VCFPGLOADER_LOAD(ch_input)
+
+    // Access outputs
+    VCFPGLOADER_LOAD.out.report     // JSON report with loading statistics
+    VCFPGLOADER_LOAD.out.log        // Detailed loading log
+    VCFPGLOADER_LOAD.out.row_count  // Number of variants loaded
 }
 ```
 
-The module uses `PGPASSWORD` as a Nextflow secret. See [nf-core modules](https://github.com/nf-core/modules) for integration into nf-core pipelines.
+#### Database Password
+
+Set `PGPASSWORD` via environment variable or Nextflow secrets:
+
+```groovy
+// nextflow.config - Option 1: Environment variable
+env {
+    PGPASSWORD = System.getenv('PGPASSWORD')
+}
+
+// nextflow.config - Option 2: Nextflow secrets
+env {
+    PGPASSWORD = secrets.PGPASSWORD
+}
+```
+
+#### Configuration
+
+Customize batch size and other options via `ext` directives:
+
+```groovy
+// nextflow.config
+process {
+    withName: 'VCFPGLOADER_LOAD' {
+        ext.batch_size = '50000'  // variants per batch (default: 10000)
+        ext.args = '--normalize'  // additional CLI arguments
+    }
+}
+```
+
+#### Outputs
+
+| Channel | Description |
+|---------|-------------|
+| `report` | JSON file with loading statistics (variants loaded, elapsed time, throughput) |
+| `log` | Detailed loading log with warnings/errors |
+| `row_count` | Integer count of variants successfully loaded |
+| `versions` | Tool version for MultiQC reporting |
 
 ### Verify Installation
 
