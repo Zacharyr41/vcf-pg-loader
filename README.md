@@ -6,6 +6,16 @@
 
 High-performance VCF to PostgreSQL loader with clinical-grade compliance.
 
+## Video Tutorials
+
+### What is a VCF File?
+
+[![What is a VCF File?](https://img.youtube.com/vi/o7SUv4A5Uyg/maxresdefault.jpg)](https://www.youtube.com/watch?v=o7SUv4A5Uyg)
+
+### vcf-pg-loader Demo
+
+[![vcf-pg-loader Demo](https://img.youtube.com/vi/iXv-4B0AOXk/maxresdefault.jpg)](https://www.youtube.com/watch?v=iXv-4B0AOXk)
+
 ## Features
 
 - **Streaming VCF parsing** with cyvcf2 for memory-efficient processing
