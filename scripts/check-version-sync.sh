@@ -19,7 +19,7 @@ extract_versions() {
 
     V_BIOCONDA=$(grep -E '^\{% set version = "[0-9]+\.[0-9]+\.[0-9]+" %\}' "$BIOCONDA" | sed 's/.*"\([0-9.]*\)".*/\1/')
 
-    V_MAIN_NF=$(grep -o 'ghcr.io/zacharyr41/vcf-pg-loader:[0-9.]*' "$MAIN_NF" | head -1 | sed 's/.*://')
+    V_MAIN_NF=$(grep -o 'biocontainers/vcf-pg-loader:[0-9.]*' "$MAIN_NF" | head -1 | sed 's/.*://')
 
     V_ENV_YML=$(grep -o 'bioconda::vcf-pg-loader=[0-9.]*' "$ENV_YML" | sed 's/.*=//')
 }

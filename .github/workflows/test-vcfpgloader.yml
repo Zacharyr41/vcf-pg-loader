@@ -74,7 +74,7 @@ jobs:
 
       - name: Update container tag in main.nf
         run: |
-          sed -i "s|ghcr.io/zacharyr41/vcf-pg-loader:0.4.0|ghcr.io/zacharyr41/vcf-pg-loader:test-${{ github.run_id }}|g" \
+          sed -i "s|biocontainers/vcf-pg-loader:[0-9.]*--[a-z0-9_]*|ghcr.io/zacharyr41/vcf-pg-loader:test-${{ github.run_id }}|g" \
             nf-core/modules/vcfpgloader/load/main.nf
 
       - name: Set Nextflow secrets

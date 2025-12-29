@@ -146,8 +146,13 @@ replace = '{{% set version = "{new_version}" %}}'
 
 [[tool.bumpversion.files]]
 filename = "nf-core/modules/vcfpgloader/load/main.nf"
-search = "ghcr.io/zacharyr41/vcf-pg-loader:{current_version}"
-replace = "ghcr.io/zacharyr41/vcf-pg-loader:{new_version}"
+search = "depot.galaxyproject.org/singularity/vcf-pg-loader:{current_version}--pyhdfd78af_0"
+replace = "depot.galaxyproject.org/singularity/vcf-pg-loader:{new_version}--pyhdfd78af_0"
+
+[[tool.bumpversion.files]]
+filename = "nf-core/modules/vcfpgloader/load/main.nf"
+search = "biocontainers/vcf-pg-loader:{current_version}--pyhdfd78af_0"
+replace = "biocontainers/vcf-pg-loader:{new_version}--pyhdfd78af_0"
 
 [[tool.bumpversion.files]]
 filename = "nf-core/modules/vcfpgloader/load/environment.yml"
