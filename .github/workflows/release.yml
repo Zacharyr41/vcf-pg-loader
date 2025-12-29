@@ -104,7 +104,7 @@ jobs:
   # are updated by bump-my-version, NOT by this job.
   # =============================================================================
   verify-nfcore-module-versions:
-    needs: [bump-and-tag, build-and-push-docker]
+    needs: [bump-and-tag]
     if: ${{ !inputs.skip_nfcore }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -122,15 +122,27 @@ jobs:
           VERSION="${{ inputs.version }}"
           echo "Verifying nf-core module files contain version $VERSION"
 
-          # Check container tag in main.nf
           MAIN_NF="nf-core/modules/vcfpgloader/load/main.nf"
-          if grep -q "ghcr.io/zacharyr41/vcf-pg-loader:${VERSION}" "$MAIN_NF"; then
-            echo "✓ main.nf container tag matches v${VERSION}"
+
+          # Check BioContainers Docker URL in main.nf
+          if grep -q "biocontainers/vcf-pg-loader:${VERSION}--" "$MAIN_NF"; then
+            echo "✓ main.nf BioContainers Docker URL matches v${VERSION}"
           else
-            echo "::error::main.nf container tag does not match version ${VERSION}"
-            echo "Expected: ghcr.io/zacharyr41/vcf-pg-loader:${VERSION}"
+            echo "::error::main.nf BioContainers Docker URL does not match version ${VERSION}"
+            echo "Expected pattern: biocontainers/vcf-pg-loader:${VERSION}--*"
             echo "Found:"
-            grep -o 'ghcr.io/zacharyr41/vcf-pg-loader:[0-9.]*' "$MAIN_NF" || echo "  (no match found)"
+            grep -o 'biocontainers/vcf-pg-loader:[^'\''"]*' "$MAIN_NF" || echo "  (no match found)"
+            exit 1
+          fi
+
+          # Check Singularity URL in main.nf
+          if grep -q "depot.galaxyproject.org/singularity/vcf-pg-loader:${VERSION}--" "$MAIN_NF"; then
+            echo "✓ main.nf Singularity URL matches v${VERSION}"
+          else
+            echo "::error::main.nf Singularity URL does not match version ${VERSION}"
+            echo "Expected pattern: depot.galaxyproject.org/singularity/vcf-pg-loader:${VERSION}--*"
+            echo "Found:"
+            grep -o 'depot.galaxyproject.org/singularity/vcf-pg-loader:[^'\''"]*' "$MAIN_NF" || echo "  (no match found)"
             exit 1
           fi
 
@@ -150,8 +162,10 @@ jobs:
           echo "All nf-core module version checks passed!"
 
   # =============================================================================
-  # DOCKER IMAGE BUILD AND PUBLISH
-  # Must complete before nf-core module updates since the module references the container.
+  # DOCKER IMAGE BUILD AND PUBLISH (OPTIONAL)
+  # Builds Docker image for ghcr.io for users who want to use vcf-pg-loader
+  # directly via Docker (not via nf-core). The nf-core module uses BioContainers
+  # which are auto-built from bioconda.
   # =============================================================================
   build-and-push-docker:
     needs: bump-and-tag
@@ -299,7 +313,7 @@ jobs:
   # bump-my-version in the bump-and-tag job, NOT by this job.
   # =============================================================================
   nfcore-modules-pr:
-    needs: [build-and-push-docker]
+    needs: [bump-and-tag]
     if: ${{ !inputs.skip_nfcore && (inputs.create_nfcore_pr || inputs.nfcore_update_branch != '') && !inputs.dry_run }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -387,7 +401,7 @@ jobs:
             Updates the `vcfpgloader/load` module to version `${{ inputs.version }}`.
 
             ### Changes
-            - Updated container tag to `ghcr.io/zacharyr41/vcf-pg-loader:${{ inputs.version }}`
+            - Updated BioContainers URLs to version `${{ inputs.version }}`
             - Updated bioconda package to `vcf-pg-loader=${{ inputs.version }}`
 
             ### References
@@ -441,7 +455,8 @@ jobs:
 
             ### Artifacts
             - **PyPI**: https://pypi.org/project/vcf-pg-loader/${version}/
-            - **Docker**: \`ghcr.io/zacharyr41/vcf-pg-loader:${version}\`
+            - **BioContainers**: \`biocontainers/vcf-pg-loader:${version}--pyhdfd78af_0\`
+            - **Docker (direct)**: \`ghcr.io/zacharyr41/vcf-pg-loader:${version}\`
             - **nf-core PR**: ${{ needs.nfcore-modules-pr.outputs.pr_url || 'N/A' }}
 
             ---
