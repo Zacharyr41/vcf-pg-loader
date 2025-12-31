@@ -1,0 +1,12 @@
+[extend]
+useDefault = true
+
+[allowlist]
+paths = [
+    '''docs/deployment/aws-rds-encryption\.md$''',
+    '''\.gitleaks\.toml$''',
+    '''docker/certs/.*\.key$''',
+]
+commits = [
+    "4782b8f3a4765725e02ded42626a3811759f901a",
+]

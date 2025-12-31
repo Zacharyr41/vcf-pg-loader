@@ -6,6 +6,7 @@ from dataclasses import dataclass
 @dataclass
 class VariantRecord:
     """Represents a single variant record."""
+
     chrom: str
     pos: int
     ref: str
@@ -46,6 +47,9 @@ class VariantRecord:
     original_ref: str | None = None
     original_alt: str | None = None
 
+    # Sample identification (for multi-sample VCFs)
+    sample_id: str | None = None
+
     @property
     def variant_type(self) -> str:
         """Classify variant type based on REF and ALT alleles."""
@@ -60,4 +64,4 @@ class VariantRecord:
     def pos_range(self) -> str:
         """Return PostgreSQL int8range representation."""
         end = self.end_pos or (self.pos + len(self.ref))
-        return f'[{self.pos},{end})'
+        return f"[{self.pos},{end})"

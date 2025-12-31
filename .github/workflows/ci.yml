@@ -103,6 +103,7 @@ jobs:
         run: uv run pytest -v --tb=short -n auto tests/integration
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
+          VCF_PG_LOADER_REQUIRE_TLS: "false"
 
   test-e2e:
     runs-on: ubuntu-latest
@@ -153,6 +154,7 @@ jobs:
         run: uv run pytest -v --tb=short -n auto tests/test_*.py
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
+          VCF_PG_LOADER_REQUIRE_TLS: "false"
 
   test-slow:
     runs-on: ubuntu-latest
@@ -205,6 +207,7 @@ jobs:
         run: uv run pytest -v --tb=short -n auto -m "slow"
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
+          VCF_PG_LOADER_REQUIRE_TLS: "false"
 
   giab-benchmark:
     runs-on: ubuntu-latest
@@ -257,6 +260,7 @@ jobs:
         run: uv run pytest -v --tb=short -m "giab and not giab_full" -s
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
+          VCF_PG_LOADER_REQUIRE_TLS: "false"
 
       - name: Print benchmark results
         if: always()

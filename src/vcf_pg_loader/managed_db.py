@@ -1,6 +1,8 @@
 """Managed PostgreSQL database using Docker for zero-config usage."""
 
+import subprocess
 import time
+from pathlib import Path
 
 import docker
 import docker.errors
@@ -12,6 +14,7 @@ DEFAULT_PASSWORD = "vcfloader"
 DEFAULT_DATABASE = "variants"
 DEFAULT_IMAGE = "postgres:16-alpine"
 VOLUME_NAME = "vcf-pg-loader-data"
+CERTS_VOLUME_NAME = "vcf-pg-loader-certs"
 
 
 class DockerNotAvailableError(Exception):
@@ -34,12 +37,16 @@ class ManagedDatabase:
         db.stop()
     """
 
-    def __init__(self):
+    def __init__(self, enable_tls: bool = True):
         """Initialize connection to Docker daemon.
+
+        Args:
+            enable_tls: Whether to enable TLS for database connections.
 
         Raises:
             DockerNotAvailableError: If Docker is not installed or not running.
         """
+        self._enable_tls = enable_tls
         try:
             self._client = docker.from_env()
             self._client.ping()
@@ -50,6 +57,7 @@ class ManagedDatabase:
                 "  Linux: curl -fsSL https://get.docker.com | sh\n"
                 "  Windows: https://docs.docker.com/desktop/install/windows-install/"
             ) from e
+        self._certs_dir: Path | None = None
 
     def _get_container(self):
         """Get the managed container if it exists."""
@@ -88,7 +96,42 @@ class ManagedDatabase:
             return None
 
         port = self._get_host_port(container)
-        return f"postgresql://{DEFAULT_USER}:{DEFAULT_PASSWORD}@localhost:{port}/{DEFAULT_DATABASE}"
+        base_url = (
+            f"postgresql://{DEFAULT_USER}:{DEFAULT_PASSWORD}@localhost:{port}/{DEFAULT_DATABASE}"
+        )
+
+        if self._enable_tls:
+            return f"{base_url}?sslmode=require"
+        return base_url
+
+    def _ensure_certs(self) -> Path:
+        """Ensure TLS certificates exist, generating if needed.
+
+        Returns:
+            Path to the certificates directory.
+        """
+        project_root = Path(__file__).parent.parent.parent
+        certs_dir = project_root / "docker" / "certs"
+
+        if not certs_dir.exists() or not (certs_dir / "server.crt").exists():
+            script_path = project_root / "scripts" / "generate-certs.sh"
+            if script_path.exists():
+                subprocess.run([str(script_path)], check=True, capture_output=True)
+
+        self._certs_dir = certs_dir
+        return certs_dir
+
+    def get_ca_cert_path(self) -> Path | None:
+        """Get path to CA certificate if TLS is enabled.
+
+        Returns:
+            Path to CA certificate, or None if TLS not enabled.
+        """
+        if not self._enable_tls:
+            return None
+        certs_dir = self._ensure_certs()
+        ca_path = certs_dir / "ca.crt"
+        return ca_path if ca_path.exists() else None
 
     def start(self, wait: bool = True, timeout: int = 30) -> str:
         """Start the managed PostgreSQL database.
@@ -107,6 +150,37 @@ class ManagedDatabase:
         container = self._get_container()
 
         if container is None:
+            volumes = {VOLUME_NAME: {"bind": "/var/lib/postgresql/data", "mode": "rw"}}
+            command = None
+
+            if self._enable_tls:
+                certs_dir = self._ensure_certs()
+                project_root = Path(__file__).parent.parent.parent
+                conf_dir = project_root / "docker" / "postgres" / "conf.d"
+                pg_hba_path = project_root / "docker" / "postgres" / "pg_hba.conf"
+
+                if certs_dir.exists() and conf_dir.exists():
+                    volumes[str(certs_dir)] = {
+                        "bind": "/var/lib/postgresql/certs",
+                        "mode": "ro",
+                    }
+                    volumes[str(conf_dir)] = {
+                        "bind": "/etc/postgresql/conf.d",
+                        "mode": "ro",
+                    }
+                    if pg_hba_path.exists():
+                        volumes[str(pg_hba_path)] = {
+                            "bind": "/etc/postgresql/pg_hba.conf",
+                            "mode": "ro",
+                        }
+                    command = [
+                        "postgres",
+                        "-c",
+                        "hba_file=/etc/postgresql/pg_hba.conf",
+                        "-c",
+                        "include_dir=/etc/postgresql/conf.d",
+                    ]
+
             container = self._client.containers.run(
                 DEFAULT_IMAGE,
                 name=CONTAINER_NAME,
@@ -117,7 +191,8 @@ class ManagedDatabase:
                     "POSTGRES_PASSWORD": DEFAULT_PASSWORD,
                     "POSTGRES_DB": DEFAULT_DATABASE,
                 },
-                volumes={VOLUME_NAME: {"bind": "/var/lib/postgresql/data", "mode": "rw"}},
+                volumes=volumes,
+                command=command,
                 restart_policy={"Name": "unless-stopped"},
             )
         elif container.status != "running":
@@ -169,6 +244,7 @@ class ManagedDatabase:
             "url": self.get_url() if running else None,
             "container_name": CONTAINER_NAME,
             "image": DEFAULT_IMAGE,
+            "tls_enabled": self._enable_tls,
         }
 
     def reset(self) -> None:

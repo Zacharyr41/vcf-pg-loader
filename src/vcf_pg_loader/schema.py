@@ -1,12 +1,39 @@
 """PostgreSQL schema management for VCF data."""
 
-
 import asyncpg
 
+from .audit.schema import AuditSchemaManager
+from .auth.schema import AuthSchemaManager
+from .data.schema import DisposalSchemaManager
+from .phi.schema import PHISchemaManager
+from .security.schema import SecuritySchemaManager
+
 HUMAN_CHROMOSOMES = [
-    'chr1', 'chr2', 'chr3', 'chr4', 'chr5', 'chr6', 'chr7', 'chr8', 'chr9',
-    'chr10', 'chr11', 'chr12', 'chr13', 'chr14', 'chr15', 'chr16', 'chr17',
-    'chr18', 'chr19', 'chr20', 'chr21', 'chr22', 'chrX', 'chrY', 'chrM'
+    "chr1",
+    "chr2",
+    "chr3",
+    "chr4",
+    "chr5",
+    "chr6",
+    "chr7",
+    "chr8",
+    "chr9",
+    "chr10",
+    "chr11",
+    "chr12",
+    "chr13",
+    "chr14",
+    "chr15",
+    "chr16",
+    "chr17",
+    "chr18",
+    "chr19",
+    "chr20",
+    "chr21",
+    "chr22",
+    "chrX",
+    "chrY",
+    "chrM",
 ]
 
 
@@ -15,8 +42,18 @@ class SchemaManager:
 
     def __init__(self, human_genome: bool = True):
         self.human_genome = human_genome
+        self._audit_manager = AuditSchemaManager()
+        self._auth_manager = AuthSchemaManager()
+        self._phi_manager = PHISchemaManager()
+        self._disposal_manager = DisposalSchemaManager()
+        self._security_manager = SecuritySchemaManager()
 
-    async def create_schema(self, conn: asyncpg.Connection) -> None:
+    async def create_schema(
+        self,
+        conn: asyncpg.Connection,
+        skip_encryption: bool = False,
+        skip_emergency: bool = False,
+    ) -> None:
         """Create complete database schema."""
         await self.drop_schema(conn)
         await self.create_extensions(conn)
@@ -24,6 +61,14 @@ class SchemaManager:
         await self.create_variants_table(conn)
         await self.create_audit_table(conn)
         await self.create_samples_table(conn)
+        await self.create_hipaa_audit_schema(conn)
+        await self.create_phi_vault_schema(conn)
+        await self.create_auth_schema(conn)
+        await self.create_disposal_schema(conn)
+        if not skip_encryption:
+            await self.create_encryption_schema(conn)
+        if not skip_emergency:
+            await self.create_emergency_access_schema(conn)
 
     async def drop_schema(self, conn: asyncpg.Connection) -> None:
         """Drop existing schema tables for clean recreation."""
@@ -257,6 +302,104 @@ class SchemaManager:
 
     async def vacuum_analyze(self, conn: asyncpg.Connection) -> None:
         """Run VACUUM ANALYZE for query planner statistics."""
-        await conn.execute('VACUUM ANALYZE variants')
-        await conn.execute('VACUUM ANALYZE variant_load_audit')
-        await conn.execute('VACUUM ANALYZE samples')
+        await conn.execute("VACUUM ANALYZE variants")
+        await conn.execute("VACUUM ANALYZE variant_load_audit")
+        await conn.execute("VACUUM ANALYZE samples")
+
+    async def create_hipaa_audit_schema(self, conn: asyncpg.Connection) -> list[str]:
+        """Create HIPAA-compliant audit logging schema.
+
+        Creates the hipaa_audit_log partitioned table with:
+        - Immutability triggers (prevents UPDATE/DELETE)
+        - Monthly partitions for retention management
+        - Compliance query views
+
+        Returns:
+            List of created partition names
+        """
+        await self._audit_manager.create_audit_schema(conn)
+        return await self._audit_manager.create_initial_partitions(conn)
+
+    async def get_audit_partition_info(self, conn: asyncpg.Connection) -> list[dict]:
+        """Get information about HIPAA audit log partitions."""
+        return await self._audit_manager.get_partition_info(conn)
+
+    async def verify_audit_immutability(self, conn: asyncpg.Connection) -> bool:
+        """Verify HIPAA audit log immutability triggers are active."""
+        return await self._audit_manager.verify_immutability(conn)
+
+    async def create_phi_vault_schema(self, conn: asyncpg.Connection) -> None:
+        """Create PHI vault schema for sample ID anonymization.
+
+        Creates the phi_vault schema with:
+        - sample_id_mapping table for original->anonymous mappings
+        - reverse_lookup_audit table for compliance tracking
+        - Immutability triggers on mappings
+        - Restricted access roles (phi_admin, phi_viewer)
+        """
+        await self._phi_manager.create_phi_schema(conn)
+
+    async def verify_phi_schema(self, conn: asyncpg.Connection) -> bool:
+        """Verify PHI vault schema exists and is properly configured."""
+        return await self._phi_manager.verify_schema_exists(conn)
+
+    async def get_phi_stats(self, conn: asyncpg.Connection) -> dict:
+        """Get PHI vault statistics."""
+        return await self._phi_manager.get_mapping_stats(conn)
+
+    async def create_auth_schema(self, conn: asyncpg.Connection) -> None:
+        """Create authentication schema with users table.
+
+        Creates tables for:
+        - User accounts
+        - Sessions
+        - Password history
+        """
+        await self._auth_manager.create_auth_schema(conn)
+
+    async def create_disposal_schema(self, conn: asyncpg.Connection) -> None:
+        """Create disposal tracking schema.
+
+        Creates tables for:
+        - Disposal records with authorization tracking
+        - Retention policies
+        - Verification and certificate generation
+        """
+        await self._disposal_manager.create_disposal_schema(conn)
+
+    async def verify_disposal_schema(self, conn: asyncpg.Connection) -> bool:
+        """Verify disposal schema exists."""
+        return await self._disposal_manager.verify_schema_exists(conn)
+
+    async def create_encryption_schema(self, conn: asyncpg.Connection) -> None:
+        """Create encryption schema.
+
+        HIPAA Citation: 45 CFR 164.312(a)(2)(iv) - Encryption and Decryption
+
+        Creates tables for:
+        - Encryption keys (encrypted with master key)
+        - Key rotation history
+        - Encrypted data registry
+        - Audit retention policy
+        """
+        await self._security_manager.create_encryption_schema(conn)
+
+    async def verify_encryption_schema(self, conn: asyncpg.Connection) -> bool:
+        """Verify encryption schema exists."""
+        return await self._security_manager.schema_exists(conn)
+
+    async def create_emergency_access_schema(self, conn: asyncpg.Connection) -> None:
+        """Create emergency access schema.
+
+        HIPAA Citation: 45 CFR 164.312(a)(2)(ii) - REQUIRED specification
+
+        Creates tables for:
+        - Emergency access tokens
+        - Emergency access audit log
+        - Post-incident review tracking
+        """
+        await self._auth_manager.create_emergency_access_schema(conn)
+
+    async def verify_emergency_access_schema(self, conn: asyncpg.Connection) -> bool:
+        """Verify emergency access schema exists."""
+        return await self._auth_manager.emergency_access_exists(conn)
