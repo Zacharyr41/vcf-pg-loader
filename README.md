@@ -10,11 +10,11 @@ High-performance VCF to PostgreSQL loader with clinical-grade compliance.
 
 ### What is a VCF File?
 
-[![What is a VCF File?](https://img.youtube.com/vi/o7SUv4A5Uyg/maxresdefault.jpg)](https://www.youtube.com/watch?v=o7SUv4A5Uyg)
+[![What is a VCF File?](https://img.youtube.com/vi/J2YFGAeIcrc/maxresdefault.jpg)](https://www.youtube.com/watch?v=J2YFGAeIcrc)
 
 ### vcf-pg-loader Demo
 
-[![vcf-pg-loader Demo](https://img.youtube.com/vi/iXv-4B0AOXk/maxresdefault.jpg)](https://www.youtube.com/watch?v=iXv-4B0AOXk)
+[![vcf-pg-loader Demo](https://img.youtube.com/vi/yJbYF2GR2uI/maxresdefault.jpg)](https://www.youtube.com/watch?v=yJbYF2GR2uI)
 
 ## Features
 
