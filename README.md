@@ -3,6 +3,7 @@
 [![CI](https://github.com/Zacharyr41/vcf-pg-loader/actions/workflows/ci.yml/badge.svg)](https://github.com/Zacharyr41/vcf-pg-loader/actions/workflows/ci.yml)
 [![install with bioconda](https://img.shields.io/badge/install%20with-bioconda-brightgreen.svg?style=flat)](http://bioconda.github.io/recipes/vcf-pg-loader/README.html)
 [![PyPI version](https://badge.fury.io/py/vcf-pg-loader.svg)](https://badge.fury.io/py/vcf-pg-loader)
+[![nf-core module](https://img.shields.io/badge/nf--core-module-blue?logo=nextflow)](https://nf-co.re/modules/vcfpgloader_load)
 
 High-performance VCF to PostgreSQL loader with clinical-grade compliance.
 
