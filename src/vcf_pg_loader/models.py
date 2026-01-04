@@ -50,6 +50,16 @@ class VariantRecord:
     # Sample identification (for multi-sample VCFs)
     sample_id: str | None = None
 
+    # PRS QC metrics (computed at load time)
+    call_rate: float | None = None
+    n_het: int | None = None
+    n_hom_ref: int | None = None
+    n_hom_alt: int | None = None
+    aaf: float | None = None
+    maf: float | None = None
+    mac: int | None = None
+    hwe_p: float | None = None
+
     @property
     def variant_type(self) -> str:
         """Classify variant type based on REF and ALT alleles."""

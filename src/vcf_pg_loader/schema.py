@@ -144,6 +144,16 @@ class SchemaManager:
                 -- Sample tracking
                 sample_id VARCHAR(255),
 
+                -- PRS QC metrics (computed at load time)
+                call_rate REAL CHECK (call_rate >= 0 AND call_rate <= 1),
+                n_het INTEGER CHECK (n_het >= 0),
+                n_hom_ref INTEGER CHECK (n_hom_ref >= 0),
+                n_hom_alt INTEGER CHECK (n_hom_alt >= 0),
+                aaf REAL CHECK (aaf >= 0 AND aaf <= 1),
+                maf REAL CHECK (maf >= 0 AND maf <= 0.5),
+                mac INTEGER CHECK (mac >= 0),
+                hwe_p REAL CHECK (hwe_p >= 0 AND hwe_p <= 1),
+
                 -- Audit tracking
                 load_batch_id UUID NOT NULL,
                 created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,

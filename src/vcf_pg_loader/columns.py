@@ -34,6 +34,14 @@ VARIANT_COLUMNS: list[str] = [
     "info",
     "load_batch_id",
     "sample_id",
+    "call_rate",
+    "n_het",
+    "n_hom_ref",
+    "n_hom_alt",
+    "aaf",
+    "maf",
+    "mac",
+    "hwe_p",
 ]
 
 VARIANT_COLUMNS_BASIC: list[str] = [
@@ -56,6 +64,14 @@ VARIANT_COLUMNS_BASIC: list[str] = [
     "clinvar_sig",
     "load_batch_id",
     "sample_id",
+    "call_rate",
+    "n_het",
+    "n_hom_ref",
+    "n_hom_alt",
+    "aaf",
+    "maf",
+    "mac",
+    "hwe_p",
 ]
 
 
@@ -84,6 +100,14 @@ def get_record_values(record: VariantRecord, load_batch_id: UUID) -> tuple:
         record.clinvar_sig,
         load_batch_id,
         record.sample_id,
+        record.call_rate,
+        record.n_het,
+        record.n_hom_ref,
+        record.n_hom_alt,
+        record.aaf,
+        record.maf,
+        record.mac,
+        record.hwe_p,
     )
 
 
@@ -125,4 +149,12 @@ def get_record_values_full(
         info_json,
         load_batch_id,
         sample_id,
+        record.call_rate,
+        record.n_het,
+        record.n_hom_ref,
+        record.n_hom_alt,
+        record.aaf,
+        record.maf,
+        record.mac,
+        record.hwe_p,
     )
