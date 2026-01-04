@@ -1796,6 +1796,107 @@ def doctor(
             console.print("\nSee docs/deployment/container-security.md for remediation.")
 
 
+@app.command("compute-sample-qc")
+def compute_sample_qc(
+    batch_id: Annotated[
+        int | None, typer.Option("--batch-id", "-b", help="Batch audit_id to compute QC for")
+    ] = None,
+    sample_id: Annotated[
+        str | None, typer.Option("--sample-id", "-s", help="Single sample ID to compute QC for")
+    ] = None,
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+) -> None:
+    """Compute sample-level QC metrics from loaded genotype data.
+
+    Computes per-sample metrics including call rate, het/hom ratio, Ti/Tv ratio,
+    sex inference from X chromosome heterozygosity, and F_inbreeding coefficient.
+
+    Samples pass QC if:
+    - call_rate >= 99%
+    - contamination_estimate < 2.5% (or not available)
+    - sex_concordant = TRUE (or not available)
+
+    Example:
+        vcf-pg-loader compute-sample-qc --batch-id 1
+        vcf-pg-loader compute-sample-qc --sample-id SAMPLE001
+    """
+    setup_logging(verbose, quiet)
+
+    if batch_id is None and sample_id is None:
+        console.print("[red]Error: Either --batch-id or --sample-id required[/red]")
+        raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    from .qc.sample_qc import SampleQCComputer
+    from .qc.schema import SampleQCSchemaManager
+
+    async def run_compute() -> dict:
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            schema_manager = SampleQCSchemaManager()
+            await schema_manager.create_sample_qc_schema(conn)
+
+            computer = SampleQCComputer(schema_manager)
+
+            if batch_id is not None:
+                result = await computer.compute_for_batch(conn, batch_id)
+            else:
+                metrics = await computer.compute_for_sample(conn, sample_id)
+                result = metrics.to_db_row()
+                result["qc_pass"] = (
+                    metrics.call_rate >= 0.99
+                    and (
+                        metrics.contamination_estimate is None
+                        or metrics.contamination_estimate < 0.025
+                    )
+                    and (metrics.sex_concordant is None or metrics.sex_concordant)
+                )
+
+            return result
+        finally:
+            await conn.close()
+
+    try:
+        result = asyncio.run(run_compute())
+
+        if json_output:
+            import json as json_module
+
+            console.print(json_module.dumps(result, indent=2, default=str))
+        elif not quiet:
+            if batch_id is not None:
+                n_samples = result["samples_processed"]
+                console.print(f"[green]✓[/green] Computed QC for {n_samples} samples")
+                console.print(f"  Batch ID: {batch_id}")
+                console.print(f"  Pass: {result['samples_pass']}")
+                console.print(f"  Fail: {result['samples_fail']}")
+                console.print(f"  Mean call rate: {result['mean_call_rate']:.4f}")
+            else:
+                status = "[green]PASS[/green]" if result.get("qc_pass") else "[red]FAIL[/red]"
+                console.print(f"Sample QC: {status}")
+                console.print(f"  Sample ID: {result['sample_id']}")
+                console.print(f"  Call rate: {result['call_rate']:.4f}")
+                if result.get("het_hom_ratio"):
+                    console.print(f"  Het/Hom ratio: {result['het_hom_ratio']:.4f}")
+                if result.get("ti_tv_ratio"):
+                    console.print(f"  Ti/Tv ratio: {result['ti_tv_ratio']:.4f}")
+                if result.get("sex_inferred"):
+                    console.print(f"  Inferred sex: {result['sex_inferred']}")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
 audit_app = typer.Typer(help="HIPAA audit log management and verification")
 app.add_typer(audit_app, name="audit")
 
