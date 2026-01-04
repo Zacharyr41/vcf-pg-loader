@@ -7,6 +7,7 @@ loaded as reference tables. Test patterns derived from echtvar
 
 See tests/vendored/echtvar/ATTRIBUTION.md for full attribution.
 """
+
 import json
 
 import pytest
@@ -24,7 +25,11 @@ from vendored.echtvar import (
 def fix_postgres_url(url: str) -> str:
     """Convert testcontainers URL to asyncpg-compatible format."""
     if url.startswith("postgresql+psycopg2://"):
-        return url.replace("postgresql+psycopg2://", "postgresql://")
+        url = url.replace("postgresql+psycopg2://", "postgresql://")
+    if "?" in url:
+        url = url + "&sslmode=disable"
+    else:
+        url = url + "?sslmode=disable"
     return url
 
 
@@ -401,9 +406,7 @@ class TestAnnotationChrPrefixHandling:
         from vcf_pg_loader.annotation_loader import AnnotationLoader
         from vcf_pg_loader.annotator import VariantAnnotator
 
-        db_vcf_with_chr = generate_gnomad_vcf_content(
-            n_variants=10, seed=42, use_chr_prefix=True
-        )
+        db_vcf_with_chr = generate_gnomad_vcf_content(n_variants=10, seed=42, use_chr_prefix=True)
 
         db_vcf_path = write_annotation_vcf(tmp_path / "gnomad.vcf", db_vcf_with_chr)
         config_path = tmp_path / "gnomad.json"
@@ -557,7 +560,11 @@ class TestAnnotationPerformance:
         load_result = await vcf_loader.load_vcf(query_vcf_path)
 
         conn = await asyncpg.connect(db_url)
-        yield {"conn": conn, "batch_id": str(load_result["load_batch_id"]), "n_variants": n_variants}
+        yield {
+            "conn": conn,
+            "batch_id": str(load_result["load_batch_id"]),
+            "n_variants": n_variants,
+        }
         await conn.close()
 
     async def test_annotation_lookup_performance(self, benchmark_db):
@@ -580,7 +587,9 @@ class TestAnnotationPerformance:
         annotated = sum(1 for r in results if r.get("gnomad_af") is not None)
 
         print(f"\n  Annotation lookup: {n_variants:,} variants in {elapsed:.3f}s ({rate:,.0f}/sec)")
-        print(f"  Found annotations: {annotated:,}/{n_variants:,} ({100*annotated/n_variants:.1f}%)")
+        print(
+            f"  Found annotations: {annotated:,}/{n_variants:,} ({100*annotated/n_variants:.1f}%)"
+        )
 
         assert n_variants == benchmark_db["n_variants"]
         assert annotated == n_variants
@@ -620,7 +629,9 @@ class TestAnnotationPerformance:
         elapsed = time.time() - start
 
         rate = result["variants_loaded"] / elapsed
-        print(f"\n  Annotation load: {result['variants_loaded']:,} variants in {elapsed:.2f}s ({rate:,.0f}/sec)")
+        print(
+            f"\n  Annotation load: {result['variants_loaded']:,} variants in {elapsed:.2f}s ({rate:,.0f}/sec)"
+        )
 
         assert result["variants_loaded"] == n_variants
         assert rate > 20000

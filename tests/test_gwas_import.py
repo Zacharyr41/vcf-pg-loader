@@ -548,7 +548,7 @@ class TestGWASImportIntegration:
 
         try:
             loader = GWASLoader()
-            await loader.import_gwas(
+            result = await loader.import_gwas(
                 conn=test_db,
                 tsv_path=path,
                 study_accession="GCST_BINARY",
@@ -557,7 +557,11 @@ class TestGWASImportIntegration:
                 n_controls=40000,
             )
 
-            gwas_stats = await test_db.fetch("SELECT odds_ratio, n_cases FROM gwas_summary_stats")
+            gwas_stats = await test_db.fetch(
+                "SELECT odds_ratio, n_cases FROM gwas_summary_stats WHERE study_id = $1",
+                result["study_id"],
+            )
+            assert len(gwas_stats) > 0
             for stat in gwas_stats:
                 assert stat["odds_ratio"] is not None
         finally:
@@ -571,23 +575,34 @@ class TestGWASImportIntegration:
         manager = GWASSchemaManager()
         await manager.create_gwas_schema(test_db)
 
-        await test_db.execute("""
+        study_id = await test_db.fetchval("""
             INSERT INTO studies (study_accession, trait_name, genome_build)
-            VALUES ('GCST_TEST', 'Test', 'GRCh38')
+            VALUES ('GCST_UNIQUE_CONSTRAINT_TEST', 'Test', 'GRCh38')
+            RETURNING study_id
         """)
 
-        await test_db.execute("""
-            INSERT INTO gwas_summary_stats (study_id, effect_allele, p_value)
-            VALUES (1, 'A', 1e-8)
-        """)
+        test_variant_id = 12345
+
+        await test_db.execute(
+            """
+            INSERT INTO gwas_summary_stats (study_id, variant_id, effect_allele, p_value)
+            VALUES ($1, $2, 'A', 1e-8)
+            """,
+            study_id,
+            test_variant_id,
+        )
 
         import asyncpg
 
         with pytest.raises(asyncpg.UniqueViolationError):
-            await test_db.execute("""
+            await test_db.execute(
+                """
                 INSERT INTO gwas_summary_stats (study_id, variant_id, effect_allele, p_value)
-                VALUES (1, NULL, 'G', 1e-7)
-            """)
+                VALUES ($1, $2, 'G', 1e-7)
+                """,
+                study_id,
+                test_variant_id,
+            )
 
 
 @pytest.mark.integration

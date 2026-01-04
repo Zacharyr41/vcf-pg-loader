@@ -544,12 +544,20 @@ class TestPerformance:
     @pytest.mark.slow
     async def test_refresh_with_many_variants(self, pg_pool):
         """Test refresh performance with realistic data volume."""
+        from vcf_pg_loader.annotations.schema import PopulationFreqSchemaManager
+        from vcf_pg_loader.gwas.schema import GWASSchemaManager
         from vcf_pg_loader.schema import SchemaManager
         from vcf_pg_loader.views.prs_views import PRSViewsManager
 
         async with pg_pool.acquire() as conn:
             schema_mgr = SchemaManager(human_genome=True)
             await schema_mgr.create_schema(conn, skip_encryption=True, skip_emergency=True)
+
+            popfreq_mgr = PopulationFreqSchemaManager()
+            await popfreq_mgr.create_population_frequencies_table(conn)
+
+            gwas_mgr = GWASSchemaManager()
+            await gwas_mgr.create_gwas_schema(conn)
 
             batch_id = uuid.uuid4()
             batch_size = 10000

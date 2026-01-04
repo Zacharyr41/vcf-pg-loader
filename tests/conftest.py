@@ -336,3 +336,21 @@ def gwas_study_metadata_factory():
         return GWASStudyMetadata(**defaults)
 
     return _factory
+
+
+@pytest.fixture
+def test_tls_config():
+    """TLS configuration for tests - disables TLS for testcontainers."""
+    from vcf_pg_loader.tls import TLSConfig
+
+    return TLSConfig(require_tls=False)
+
+
+@pytest.fixture(autouse=True)
+def disable_tls_for_tests(monkeypatch):
+    """Disable TLS requirement for all tests using testcontainers.
+
+    This is needed because testcontainers PostgreSQL doesn't support TLS,
+    and the loader defaults to requiring TLS for HIPAA compliance.
+    """
+    monkeypatch.setenv("VCF_PG_LOADER_REQUIRE_TLS", "false")
