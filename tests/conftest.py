@@ -49,6 +49,14 @@ def parse_db_credentials(url: str) -> tuple[str, str]:
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+from fixtures.gwas_generator import (  # noqa: E402
+    GWASStudyMetadata,
+    GWASSummaryStatistic,
+    make_gwas_ssf_file_basic,
+    make_gwas_ssf_file_for_variant_matching,
+    make_gwas_ssf_file_minimal,
+    make_gwas_ssf_file_strand_ambiguous,
+)
 from fixtures.nf_core_datasets import GIABDataManager  # noqa: E402
 from fixtures.vcf_generator import (  # noqa: E402
     SyntheticVariant,
@@ -257,3 +265,74 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "benchmark: marks benchmark tests for performance measurement"
     )
+    config.addinivalue_line("markers", "gwas: marks GWAS import tests")
+
+
+@pytest.fixture
+def gwas_ssf_file_basic():
+    """Generate a basic GWAS-SSF file."""
+    path = make_gwas_ssf_file_basic()
+    yield path
+    if path.exists():
+        path.unlink()
+
+
+@pytest.fixture
+def gwas_ssf_file_strand_ambiguous():
+    """Generate a GWAS-SSF file with strand-ambiguous variants."""
+    path = make_gwas_ssf_file_strand_ambiguous()
+    yield path
+    if path.exists():
+        path.unlink()
+
+
+@pytest.fixture
+def gwas_ssf_file_for_variant_matching():
+    """Generate a GWAS-SSF file for variant matching tests."""
+    path = make_gwas_ssf_file_for_variant_matching()
+    yield path
+    if path.exists():
+        path.unlink()
+
+
+@pytest.fixture
+def gwas_ssf_file_minimal():
+    """Generate a minimal GWAS-SSF file."""
+    path = make_gwas_ssf_file_minimal()
+    yield path
+    if path.exists():
+        path.unlink()
+
+
+@pytest.fixture
+def gwas_summary_stat_factory():
+    """Factory for creating GWASSummaryStatistic instances."""
+
+    def _factory(**kwargs):
+        defaults = {
+            "chromosome": "1",
+            "base_pair_location": 100,
+            "effect_allele": "A",
+            "other_allele": "G",
+            "p_value": 1e-8,
+        }
+        defaults.update(kwargs)
+        return GWASSummaryStatistic(**defaults)
+
+    return _factory
+
+
+@pytest.fixture
+def gwas_study_metadata_factory():
+    """Factory for creating GWASStudyMetadata instances."""
+
+    def _factory(**kwargs):
+        defaults = {
+            "study_accession": "GCST90002357",
+            "trait_name": "Height",
+            "genome_build": "GRCh38",
+        }
+        defaults.update(kwargs)
+        return GWASStudyMetadata(**defaults)
+
+    return _factory

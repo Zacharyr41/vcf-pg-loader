@@ -849,6 +849,163 @@ def list_annotations(
         raise typer.Exit(1) from None
 
 
+@app.command("import-gwas")
+def import_gwas(
+    tsv_path: Annotated[Path, typer.Argument(help="Path to GWAS-SSF format TSV file")],
+    study_accession: Annotated[
+        str,
+        typer.Option("--study-accession", "-a", help="GWAS Catalog accession (e.g., GCST90002357)"),
+    ] = ...,
+    trait_name: Annotated[
+        str | None, typer.Option("--trait", "-t", help="Human-readable trait name")
+    ] = None,
+    trait_ontology_id: Annotated[str | None, typer.Option("--efo", help="EFO ontology ID")] = None,
+    publication_pmid: Annotated[str | None, typer.Option("--pmid", help="PubMed ID")] = None,
+    sample_size: Annotated[
+        int | None, typer.Option("--sample-size", "-n", help="Total sample size")
+    ] = None,
+    n_cases: Annotated[
+        int | None, typer.Option("--n-cases", help="Number of cases (binary traits)")
+    ] = None,
+    n_controls: Annotated[
+        int | None, typer.Option("--n-controls", help="Number of controls (binary traits)")
+    ] = None,
+    genome_build: Annotated[
+        str, typer.Option("--genome-build", "-g", help="Reference genome build")
+    ] = "GRCh38",
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+) -> None:
+    """Import GWAS summary statistics from a GWAS-SSF format TSV file.
+
+    Creates study metadata record and imports per-variant summary statistics.
+    Matches variants to existing database variants by chr:pos:ref:alt or rsID.
+    Computes is_effect_allele_alt to track effect allele orientation vs VCF.
+
+    Example:
+        vcf-pg-loader import-gwas gwas.tsv -a GCST90002357 -t "Height" -n 253288
+    """
+    setup_logging(verbose, quiet)
+
+    if not tsv_path.exists():
+        console.print(f"[red]Error: TSV file not found: {tsv_path}[/red]")
+        raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    from .gwas import GWASLoader, GWASSchemaManager
+
+    async def run_import() -> dict:
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            schema_manager = SchemaManager()
+            await schema_manager.create_schema(conn)
+
+            gwas_schema = GWASSchemaManager()
+            await gwas_schema.create_gwas_schema(conn)
+
+            loader = GWASLoader()
+            result = await loader.import_gwas(
+                conn=conn,
+                tsv_path=tsv_path,
+                study_accession=study_accession,
+                trait_name=trait_name,
+                trait_ontology_id=trait_ontology_id,
+                publication_pmid=publication_pmid,
+                sample_size=sample_size,
+                n_cases=n_cases,
+                n_controls=n_controls,
+                genome_build=genome_build,
+            )
+
+            await gwas_schema.create_gwas_indexes(conn)
+
+            return result
+        finally:
+            await conn.close()
+
+    try:
+        result = asyncio.run(run_import())
+        if not quiet:
+            console.print(f"[green]✓[/green] Imported {result['stats_imported']:,} statistics")
+            console.print(f"  Study ID: {result['study_id']}")
+            console.print(f"  Study Accession: {study_accession}")
+            console.print(f"  Matched variants: {result['stats_matched']:,}")
+            console.print(f"  Unmatched variants: {result['stats_unmatched']:,}")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@app.command("list-studies")
+def list_studies(
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """List all imported GWAS studies."""
+    import json
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_list() -> list:
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            from .gwas import GWASSchemaManager
+
+            gwas_schema = GWASSchemaManager()
+            if not await gwas_schema.verify_gwas_schema(conn):
+                return []
+
+            rows = await conn.fetch("""
+                SELECT study_id, study_accession, trait_name, sample_size,
+                       n_cases, n_controls, genome_build, created_at
+                FROM studies
+                ORDER BY created_at DESC
+            """)
+            return [dict(r) for r in rows]
+        finally:
+            await conn.close()
+
+    try:
+        studies = asyncio.run(run_list())
+
+        if json_output:
+            console.print(json.dumps(studies, indent=2, default=str))
+        elif studies:
+            for study in studies:
+                console.print(f"[cyan]{study['study_accession']}[/cyan]")
+                if study.get("trait_name"):
+                    console.print(f"  Trait: {study['trait_name']}")
+                if study.get("sample_size"):
+                    console.print(f"  Sample size: {study['sample_size']:,}")
+                if study.get("n_cases"):
+                    console.print(
+                        f"  Cases/Controls: {study['n_cases']:,}/{study.get('n_controls', 0):,}"
+                    )
+                console.print(f"  Genome build: {study.get('genome_build', 'N/A')}")
+                console.print()
+        else:
+            if not quiet:
+                console.print("[dim]No GWAS studies imported[/dim]")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
 @app.command("annotate")
 def annotate(
     batch_id: str = typer.Argument(..., help="Load batch ID of variants to annotate"),
