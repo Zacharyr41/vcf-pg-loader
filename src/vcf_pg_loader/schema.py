@@ -5,6 +5,7 @@ import asyncpg
 from .audit.schema import AuditSchemaManager
 from .auth.schema import AuthSchemaManager
 from .data.schema import DisposalSchemaManager
+from .genotypes.schema import GenotypesSchemaManager
 from .phi.schema import PHISchemaManager
 from .security.schema import SecuritySchemaManager
 
@@ -47,6 +48,7 @@ class SchemaManager:
         self._phi_manager = PHISchemaManager()
         self._disposal_manager = DisposalSchemaManager()
         self._security_manager = SecuritySchemaManager()
+        self._genotypes_manager = GenotypesSchemaManager()
 
     async def create_schema(
         self,
@@ -455,3 +457,21 @@ class SchemaManager:
     async def verify_emergency_access_schema(self, conn: asyncpg.Connection) -> bool:
         """Verify emergency access schema exists."""
         return await self._auth_manager.emergency_access_exists(conn)
+
+    async def create_genotypes_schema(self, conn: asyncpg.Connection) -> None:
+        """Create genotypes table with partitioning for sample-level genotype storage.
+
+        Creates the genotypes table with:
+        - Hash partitioning by sample_id (16 partitions)
+        - Generated column for ADJ filter status
+        - Indexes for ADJ-passing and dosage queries
+        """
+        await self._genotypes_manager.create_genotypes_schema(conn)
+
+    async def verify_genotypes_schema(self, conn: asyncpg.Connection) -> bool:
+        """Verify genotypes schema exists."""
+        return await self._genotypes_manager.verify_genotypes_schema(conn)
+
+    async def get_genotype_stats(self, conn: asyncpg.Connection) -> dict:
+        """Get genotypes table statistics."""
+        return await self._genotypes_manager.get_genotype_stats(conn)

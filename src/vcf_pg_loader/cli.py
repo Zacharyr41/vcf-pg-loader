@@ -321,6 +321,17 @@ def load(
             help="Imputation source: minimac4, beagle, impute2, or auto (default: auto-detect)",
         ),
     ] = "auto",
+    store_genotypes: bool = typer.Option(
+        False, "--store-genotypes", help="Enable per-sample genotype storage"
+    ),
+    adj_filter: bool = typer.Option(
+        False,
+        "--adj-filter",
+        help="Only store genotypes passing ADJ criteria (GQ>=20, DP>=10, AB>=0.2)",
+    ),
+    dosage_only: bool = typer.Option(
+        False, "--dosage-only", help="Store only dosage values, not hard calls (space saving)"
+    ),
 ) -> None:
     """Load a VCF file into PostgreSQL.
 
@@ -379,6 +390,9 @@ def load(
             fail_on_phi=fail_on_phi,
             min_info_score=min_info_score,
             imputation_source=imputation_source,
+            store_genotypes=store_genotypes,
+            adj_filter=adj_filter,
+            dosage_only=dosage_only,
         )
     else:
         tls_config = TLSConfig(require_tls=require_tls)
@@ -396,6 +410,9 @@ def load(
             fail_on_phi=fail_on_phi,
             min_info_score=min_info_score,
             imputation_source=imputation_source,
+            store_genotypes=store_genotypes,
+            adj_filter=adj_filter,
+            dosage_only=dosage_only,
         )
 
     loader = VCFLoader(resolved_db_url, config)

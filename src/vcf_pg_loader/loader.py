@@ -13,6 +13,7 @@ from uuid import UUID, uuid4
 import asyncpg
 
 from .audit import AuditEvent, AuditEventType, AuditLogger
+from .genotypes.genotype_loader import GenotypeLoader
 from .models import VariantRecord
 from .parsers.imputation import ImputationConfig
 from .phi.header_sanitizer import PHIScanner, SanitizationConfig
@@ -114,6 +115,9 @@ class LoadConfig:
     imputation_source: str = "auto"
     flag_hapmap3: bool = False
     hapmap3_build: str = "grch38"
+    store_genotypes: bool = False
+    adj_filter: bool = False
+    dosage_only: bool = False
 
 
 class VCFLoader:
@@ -351,6 +355,11 @@ class VCFLoader:
                 async with self.pool.acquire() as conn:
                     await self._schema_manager.drop_indexes(conn)
 
+            if self.config.store_genotypes:
+                async with self.pool.acquire() as conn:
+                    await self._schema_manager.create_genotypes_schema(conn)
+                self.logger.info("Created genotypes schema for sample-level storage")
+
             await self._start_audit(
                 vcf_path,
                 file_hash,
@@ -384,6 +393,28 @@ class VCFLoader:
             if self.config.drop_indexes:
                 async with self.pool.acquire() as conn:
                     await self._schema_manager.create_indexes(conn)
+
+            genotypes_loaded = 0
+            if self.config.store_genotypes and streaming_parser.samples:
+                self.logger.info("Loading genotypes for %d samples", len(streaming_parser.samples))
+                genotype_loader = GenotypeLoader(
+                    adj_filter=self.config.adj_filter,
+                    dosage_only=self.config.dosage_only,
+                    batch_size=self.config.batch_size,
+                )
+                async with self.pool.acquire() as conn:
+                    genotype_result = await genotype_loader.load_from_vcf(
+                        conn,
+                        vcf_path,
+                        variant_id_start=1,
+                    )
+                genotypes_loaded = genotype_result.get("genotypes_loaded", 0)
+                genotypes_skipped = genotype_result.get("genotypes_skipped", 0)
+                self.logger.info(
+                    "Loaded %d genotypes (skipped %d by ADJ filter)",
+                    genotypes_loaded,
+                    genotypes_skipped,
+                )
 
             await self._complete_audit(total_loaded)
             skipped_count = streaming_parser.skipped_by_info_score
@@ -432,6 +463,8 @@ class VCFLoader:
                 result["previous_load_id"] = str(previous_load_id)
             if skipped_count > 0:
                 result["variants_skipped"] = skipped_count
+            if genotypes_loaded > 0:
+                result["genotypes_loaded"] = genotypes_loaded
 
             return result
 
