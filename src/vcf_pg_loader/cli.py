@@ -7013,6 +7013,245 @@ def compliance_status(
         raise typer.Exit(1) from None
 
 
+export_app = typer.Typer(help="Export data to PRS tool formats")
+app.add_typer(export_app, name="export")
+
+
+@export_app.command("plink-score")
+def export_plink_score_cmd(
+    study_id: Annotated[int, typer.Option("--study-id", "-s", help="GWAS study ID to export")],
+    output: Annotated[Path, typer.Option("--output", "-o", help="Output file path")],
+    hapmap3_only: bool = typer.Option(False, "--hapmap3-only", help="Restrict to HapMap3 variants"),
+    min_info: Annotated[
+        float | None, typer.Option("--min-info", help="Minimum imputation INFO score")
+    ] = None,
+    min_maf: Annotated[float | None, typer.Option("--min-maf", help="Minimum MAF")] = None,
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+) -> None:
+    """Export GWAS summary statistics in PLINK 2.0 --score format.
+
+    Output format:
+        SNP     A1      BETA
+        rs123   A       0.05
+
+    Example:
+        vcf-pg-loader export plink-score --study-id 1 --output scores.txt
+        vcf-pg-loader export plink-score -s 1 -o scores.txt --hapmap3-only --min-info 0.8
+    """
+    setup_logging(verbose, quiet)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    from .export.prs_formats import VariantFilter, export_plink_score
+
+    async def run_export() -> int:
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            variant_filter = VariantFilter(
+                hapmap3_only=hapmap3_only,
+                min_info=min_info,
+                min_maf=min_maf,
+            )
+            return await export_plink_score(conn, study_id, output, variant_filter)
+        finally:
+            await conn.close()
+
+    try:
+        count = asyncio.run(run_export())
+        if not quiet:
+            console.print(f"[green]✓[/green] Exported {count:,} variants to {output}")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@export_app.command("prs-cs")
+def export_prs_cs_cmd(
+    study_id: Annotated[int, typer.Option("--study-id", "-s", help="GWAS study ID to export")],
+    output: Annotated[Path, typer.Option("--output", "-o", help="Output file path")],
+    use_se: bool = typer.Option(
+        True, "--use-se/--use-p", help="Include SE (default) or P-value in last column"
+    ),
+    hapmap3_only: bool = typer.Option(False, "--hapmap3-only", help="Restrict to HapMap3 variants"),
+    min_info: Annotated[
+        float | None, typer.Option("--min-info", help="Minimum imputation INFO score")
+    ] = None,
+    min_maf: Annotated[float | None, typer.Option("--min-maf", help="Minimum MAF")] = None,
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+) -> None:
+    """Export GWAS summary statistics in PRS-CS format.
+
+    Output format (with --use-se):
+        SNP     A1      A2      BETA    SE
+        rs123   A       G       0.05    0.01
+
+    Output format (with --use-p):
+        SNP     A1      A2      BETA    P
+        rs123   A       G       0.05    1e-8
+
+    Example:
+        vcf-pg-loader export prs-cs --study-id 1 --output prscs.txt
+        vcf-pg-loader export prs-cs -s 1 -o prscs.txt --use-p --hapmap3-only
+    """
+    setup_logging(verbose, quiet)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    from .export.prs_formats import VariantFilter, export_prs_cs
+
+    async def run_export() -> int:
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            variant_filter = VariantFilter(
+                hapmap3_only=hapmap3_only,
+                min_info=min_info,
+                min_maf=min_maf,
+            )
+            return await export_prs_cs(conn, study_id, output, use_se, variant_filter)
+        finally:
+            await conn.close()
+
+    try:
+        count = asyncio.run(run_export())
+        if not quiet:
+            console.print(f"[green]✓[/green] Exported {count:,} variants to {output}")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@export_app.command("ldpred2")
+def export_ldpred2_cmd(
+    study_id: Annotated[int, typer.Option("--study-id", "-s", help="GWAS study ID to export")],
+    output: Annotated[Path, typer.Option("--output", "-o", help="Output file path")],
+    hapmap3_only: bool = typer.Option(False, "--hapmap3-only", help="Restrict to HapMap3 variants"),
+    min_info: Annotated[
+        float | None, typer.Option("--min-info", help="Minimum imputation INFO score")
+    ] = None,
+    min_maf: Annotated[float | None, typer.Option("--min-maf", help="Minimum MAF")] = None,
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+) -> None:
+    """Export GWAS summary statistics in LDpred2 bigsnpr format.
+
+    Output format:
+        chr     pos     a0      a1      beta    beta_se n_eff
+        1       12345   G       A       0.05    0.01    50000
+
+    The n_eff (effective sample size) is computed automatically:
+    - For case-control: n_eff = 4 / (1/n_cases + 1/n_controls)
+    - For quantitative traits: n_eff = sample_size
+
+    Example:
+        vcf-pg-loader export ldpred2 --study-id 1 --output ldpred2.txt
+        vcf-pg-loader export ldpred2 -s 1 -o ldpred2.txt --hapmap3-only
+    """
+    setup_logging(verbose, quiet)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    from .export.prs_formats import VariantFilter, export_ldpred2
+
+    async def run_export() -> int:
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            variant_filter = VariantFilter(
+                hapmap3_only=hapmap3_only,
+                min_info=min_info,
+                min_maf=min_maf,
+            )
+            return await export_ldpred2(conn, study_id, output, variant_filter)
+        finally:
+            await conn.close()
+
+    try:
+        count = asyncio.run(run_export())
+        if not quiet:
+            console.print(f"[green]✓[/green] Exported {count:,} variants to {output}")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@export_app.command("prsice2")
+def export_prsice2_cmd(
+    study_id: Annotated[int, typer.Option("--study-id", "-s", help="GWAS study ID to export")],
+    output: Annotated[Path, typer.Option("--output", "-o", help="Output file path")],
+    hapmap3_only: bool = typer.Option(False, "--hapmap3-only", help="Restrict to HapMap3 variants"),
+    min_info: Annotated[
+        float | None, typer.Option("--min-info", help="Minimum imputation INFO score")
+    ] = None,
+    min_maf: Annotated[float | None, typer.Option("--min-maf", help="Minimum MAF")] = None,
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+) -> None:
+    """Export GWAS summary statistics in PRSice-2 format.
+
+    Output format:
+        SNP     A1      A2      BETA    SE      P
+        rs123   A       G       0.05    0.01    1e-8
+
+    Example:
+        vcf-pg-loader export prsice2 --study-id 1 --output prsice2.txt
+        vcf-pg-loader export prsice2 -s 1 -o prsice2.txt --hapmap3-only --min-maf 0.01
+    """
+    setup_logging(verbose, quiet)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    from .export.prs_formats import VariantFilter, export_prsice2
+
+    async def run_export() -> int:
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            variant_filter = VariantFilter(
+                hapmap3_only=hapmap3_only,
+                min_info=min_info,
+                min_maf=min_maf,
+            )
+            return await export_prsice2(conn, study_id, output, variant_filter)
+        finally:
+            await conn.close()
+
+    try:
+        count = asyncio.run(run_export())
+        if not quiet:
+            console.print(f"[green]✓[/green] Exported {count:,} variants to {output}")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
 def main() -> None:
     """Entry point for the CLI."""
     app()
