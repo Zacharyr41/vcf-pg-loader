@@ -47,6 +47,8 @@ VARIANT_COLUMNS: list[str] = [
     "is_imputed",
     "is_typed",
     "imputation_source",
+    "in_hapmap3",
+    "hapmap3_rsid",
 ]
 
 VARIANT_COLUMNS_BASIC: list[str] = [
@@ -82,6 +84,8 @@ VARIANT_COLUMNS_BASIC: list[str] = [
     "is_imputed",
     "is_typed",
     "imputation_source",
+    "in_hapmap3",
+    "hapmap3_rsid",
 ]
 
 
@@ -123,6 +127,8 @@ def get_record_values(record: VariantRecord, load_batch_id: UUID) -> tuple:
         record.is_imputed,
         record.is_typed,
         record.imputation_source,
+        record.in_hapmap3,
+        record.hapmap3_rsid,
     )
 
 
@@ -177,4 +183,6 @@ def get_record_values_full(
         record.is_imputed,
         record.is_typed,
         record.imputation_source,
+        record.in_hapmap3,
+        record.hapmap3_rsid,
     )

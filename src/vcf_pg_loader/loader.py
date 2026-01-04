@@ -112,6 +112,8 @@ class LoadConfig:
     sanitization_config: SanitizationConfig | None = None
     min_info_score: float | None = None
     imputation_source: str = "auto"
+    flag_hapmap3: bool = False
+    hapmap3_build: str = "grch38"
 
 
 class VCFLoader:
@@ -133,6 +135,7 @@ class VCFLoader:
         self._audit_logger = audit_logger
         self._anonymizer = None
         self._sample_mappings: dict[str, UUID] = {}
+        self._hapmap3_lookup: dict[tuple[str, int], list[dict]] | None = None
 
     async def connect(self) -> None:
         """Establish database connection pool with TLS."""
@@ -340,6 +343,9 @@ class VCFLoader:
                 "enabled" if encryptor.is_available else "disabled",
             )
 
+        if self.config.flag_hapmap3:
+            await self._load_hapmap3_lookup()
+
         try:
             if self.config.drop_indexes:
                 async with self.pool.acquire() as conn:
@@ -466,6 +472,9 @@ class VCFLoader:
             for record in batch:
                 record.sample_id = sample_id
 
+        if self._hapmap3_lookup is not None:
+            self._flag_hapmap3_variants(batch)
+
         records = [get_record_values(r, self.load_batch_id) for r in batch]
 
         async with self.pool.acquire() as conn:
@@ -581,3 +590,48 @@ class VCFLoader:
             raise RuntimeError(error_msg) from errors[0]
 
         return sum(results)
+
+    async def _load_hapmap3_lookup(self) -> None:
+        """Load HapMap3 lookup table for variant flagging."""
+        from .references.hapmap3 import HapMap3Loader
+
+        panel_name = f"hapmap3_{self.config.hapmap3_build.lower()}"
+        loader = HapMap3Loader()
+
+        async with self.pool.acquire() as conn:
+            panel_exists = await conn.fetchval(
+                "SELECT EXISTS (SELECT 1 FROM reference_panels WHERE panel_name = $1)",
+                panel_name,
+            )
+
+            if not panel_exists:
+                self.logger.warning(
+                    "HapMap3 reference panel '%s' not loaded. "
+                    "Run 'vcf-pg-loader load-reference hapmap3 --build %s' first. "
+                    "Skipping HapMap3 flagging.",
+                    panel_name,
+                    self.config.hapmap3_build,
+                )
+                return
+
+            self._hapmap3_lookup = await loader.build_lookup(conn, panel_name)
+            self.logger.info(
+                "Loaded HapMap3 lookup with %d positions for variant flagging",
+                len(self._hapmap3_lookup),
+            )
+
+    def _flag_hapmap3_variants(self, batch: list[VariantRecord]) -> None:
+        """Flag variants that are in the HapMap3 reference panel."""
+        from .references.hapmap3 import match_hapmap3_variant
+
+        for record in batch:
+            result = match_hapmap3_variant(
+                lookup=self._hapmap3_lookup,
+                chrom=record.chrom,
+                pos=record.pos,
+                ref=record.ref,
+                alt=record.alt,
+            )
+            if result is not None:
+                record.in_hapmap3 = True
+                record.hapmap3_rsid = result.get("rsid")

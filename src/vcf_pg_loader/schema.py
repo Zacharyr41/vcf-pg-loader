@@ -161,6 +161,10 @@ class SchemaManager:
                 is_typed BOOLEAN DEFAULT FALSE,
                 imputation_source VARCHAR(50),
 
+                -- HapMap3 reference panel flagging (for PRS analysis)
+                in_hapmap3 BOOLEAN DEFAULT FALSE,
+                hapmap3_rsid VARCHAR(20),
+
                 -- Audit tracking
                 load_batch_id UUID NOT NULL,
                 created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
@@ -313,6 +317,12 @@ class SchemaManager:
             CREATE INDEX IF NOT EXISTS idx_variants_imputed
             ON variants (is_imputed, info_score)
             WHERE is_imputed = TRUE
+        """)
+
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_hapmap3_variants
+            ON variants (chrom, pos)
+            WHERE in_hapmap3 = TRUE
         """)
 
     async def drop_indexes(self, conn: asyncpg.Connection) -> list[str]:

@@ -67,6 +67,10 @@ class VariantRecord:
     is_typed: bool = False
     imputation_source: str | None = None
 
+    # HapMap3 reference panel flagging
+    in_hapmap3: bool = False
+    hapmap3_rsid: str | None = None
+
     @property
     def variant_type(self) -> str:
         """Classify variant type based on REF and ALT alleles."""

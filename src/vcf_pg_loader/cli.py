@@ -1319,6 +1319,112 @@ def db_reset(
         raise typer.Exit(1) from None
 
 
+@app.command("load-reference")
+def load_reference(
+    panel_type: Annotated[
+        str,
+        typer.Argument(help="Reference panel type (hapmap3)"),
+    ],
+    tsv_path: Annotated[
+        Path | None,
+        typer.Argument(help="Path to reference panel TSV file"),
+    ] = None,
+    build: Annotated[
+        str,
+        typer.Option("--build", "-b", help="Genome build (grch37 or grch38)"),
+    ] = "grch38",
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+) -> None:
+    """Load a reference panel into the database for PRS analysis.
+
+    Reference panels like HapMap3 are used by PRS-CS, LDpred2, and other
+    Bayesian PRS methods to restrict analysis to well-characterized SNPs.
+
+    If no TSV path is provided, looks for bundled reference data in the
+    package data directory.
+
+    Example:
+        vcf-pg-loader load-reference hapmap3 --build grch38
+        vcf-pg-loader load-reference hapmap3 /path/to/hapmap3.tsv --build grch37
+    """
+    setup_logging(verbose, quiet)
+
+    if panel_type.lower() != "hapmap3":
+        console.print(f"[red]Error: Unknown panel type '{panel_type}'. Supported: hapmap3[/red]")
+        raise typer.Exit(1)
+
+    build = build.lower()
+    if build not in ("grch37", "grch38"):
+        console.print(f"[red]Error: Invalid build '{build}'. Use grch37 or grch38[/red]")
+        raise typer.Exit(1)
+
+    if tsv_path is None:
+        import importlib.resources
+
+        try:
+            with importlib.resources.files("vcf_pg_loader").joinpath(
+                f"data/references/hapmap3_{build}.tsv.gz"
+            ) as bundled_path:
+                if bundled_path.exists():
+                    tsv_path = Path(bundled_path)
+                else:
+                    data_dir = Path(__file__).parent / "data" / "references"
+                    tsv_path = data_dir / f"hapmap3_{build}.tsv.gz"
+                    if not tsv_path.exists():
+                        tsv_path = data_dir / f"hapmap3_{build}.tsv"
+        except Exception:
+            data_dir = Path(__file__).parent / "data" / "references"
+            tsv_path = data_dir / f"hapmap3_{build}.tsv.gz"
+            if not tsv_path.exists():
+                tsv_path = data_dir / f"hapmap3_{build}.tsv"
+
+    if not tsv_path.exists():
+        console.print(
+            f"[red]Error: Reference file not found: {tsv_path}[/red]\n"
+            f"Please provide a path to the HapMap3 reference file."
+        )
+        raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    from .references import HapMap3Loader, ReferenceSchemaManager
+
+    async def run_load() -> dict:
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            ref_schema = ReferenceSchemaManager()
+            await ref_schema.create_reference_panels_table(conn)
+
+            loader = HapMap3Loader()
+            result = await loader.load_reference_panel(
+                conn=conn,
+                tsv_path=tsv_path,
+                build=build,
+            )
+
+            return result
+        finally:
+            await conn.close()
+
+    try:
+        result = asyncio.run(run_load())
+        if not quiet:
+            console.print(f"[green]✓[/green] Loaded {result['variants_loaded']:,} variants")
+            console.print(f"  Panel: {result['panel_name']}")
+            console.print(f"  Build: {result['build']}")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
 @app.command()
 def doctor(
     check_container_security: bool = typer.Option(
