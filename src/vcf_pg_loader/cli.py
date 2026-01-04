@@ -332,6 +332,14 @@ def load(
     dosage_only: bool = typer.Option(
         False, "--dosage-only", help="Store only dosage values, not hard calls (space saving)"
     ),
+    parallel_query_workers: Annotated[
+        int | None,
+        typer.Option(
+            "--parallel-query-workers",
+            help="PostgreSQL parallel query workers (max_parallel_workers_per_gather). "
+            "Higher values speed up PRS queries across chromosome partitions.",
+        ),
+    ] = None,
 ) -> None:
     """Load a VCF file into PostgreSQL.
 
@@ -588,6 +596,20 @@ def init_db(
     require_tls: bool = typer.Option(
         True, "--require-tls/--no-require-tls", help="Require TLS for database connections"
     ),
+    create_validation_functions: Annotated[
+        bool,
+        typer.Option(
+            "--create-validation-functions/--skip-validation-functions",
+            help="Create SQL validation functions (HWE, allele frequency, etc.)",
+        ),
+    ] = True,
+    parallel_query_workers: Annotated[
+        int | None,
+        typer.Option(
+            "--parallel-query-workers",
+            help="Set PostgreSQL max_parallel_workers_per_gather for session",
+        ),
+    ] = None,
 ) -> None:
     """Initialize database schema.
 
@@ -596,6 +618,7 @@ def init_db(
     - Load audit table
     - Samples table
     - HIPAA-compliant audit logging (unless --skip-audit)
+    - SQL validation functions (HWE, allele frequency, n_eff, alleles_match)
     """
     resolved_db_url = _resolve_database_url(db_url, quiet=False)
     if not resolved_db_url:
@@ -618,6 +641,16 @@ def init_db(
                 partitions = await schema_manager.get_audit_partition_info(conn)
                 console.print(
                     f"[green]✓[/green] HIPAA audit schema created ({len(partitions)} partitions)"
+                )
+
+            if create_validation_functions:
+                await schema_manager.create_validation_functions(conn)
+                console.print("[green]✓[/green] SQL validation functions created")
+
+            if parallel_query_workers is not None:
+                await schema_manager.enable_parallel_query(conn, workers=parallel_query_workers)
+                console.print(
+                    f"[green]✓[/green] Parallel query workers set to {parallel_query_workers}"
                 )
 
         finally:

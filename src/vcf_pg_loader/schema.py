@@ -6,8 +6,10 @@ from .audit.schema import AuditSchemaManager
 from .auth.schema import AuthSchemaManager
 from .data.schema import DisposalSchemaManager
 from .genotypes.schema import GenotypesSchemaManager
+from .partitions import enable_parallel_query, get_partition_stats, verify_partition_pruning
 from .phi.schema import PHISchemaManager
 from .security.schema import SecuritySchemaManager
+from .validation.sql_functions import create_validation_functions
 from .views.prs_views import PRSViewsManager
 
 HUMAN_CHROMOSOMES = [
@@ -509,3 +511,43 @@ class SchemaManager:
     async def drop_prs_views(self, conn: asyncpg.Connection) -> None:
         """Drop PRS materialized views."""
         await self._prs_views_manager.drop_prs_views(conn)
+
+    async def create_validation_functions(self, conn: asyncpg.Connection) -> None:
+        """Create SQL validation functions for QC computations.
+
+        Creates the following functions:
+        - hwe_exact_test: Hardy-Weinberg equilibrium exact test
+        - af_from_dosages: Allele frequency from dosage array
+        - n_eff: Effective sample size for case-control
+        - alleles_match: Allele harmonization with strand flip support
+        """
+        await create_validation_functions(conn)
+
+    async def get_partition_stats(self, conn: asyncpg.Connection) -> dict[str, int]:
+        """Get row counts for each partition of the variants table.
+
+        Returns:
+            Dictionary mapping partition name to row count
+        """
+        return await get_partition_stats(conn)
+
+    async def enable_parallel_query(self, conn: asyncpg.Connection, workers: int = 4) -> None:
+        """Enable parallel query execution with specified worker count.
+
+        Sets max_parallel_workers_per_gather for the current session.
+
+        Args:
+            workers: Number of parallel workers (default: 4)
+        """
+        await enable_parallel_query(conn, workers)
+
+    async def verify_partition_pruning(self, conn: asyncpg.Connection, chrom: str) -> dict:
+        """Verify that partition pruning is active for a chromosome query.
+
+        Args:
+            chrom: Chromosome to query (e.g., 'chr1')
+
+        Returns:
+            Dictionary with pruning verification results
+        """
+        return await verify_partition_pruning(conn, chrom)
