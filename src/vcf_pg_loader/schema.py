@@ -132,6 +132,10 @@ class SchemaManager:
                 af_gnomad_popmax REAL,
                 af_1kg REAL,
 
+                -- gnomAD popmax with population tracking
+                gnomad_popmax_af REAL,
+                gnomad_popmax_pop VARCHAR(10),
+
                 -- Pathogenicity scores
                 cadd_phred REAL,
                 clinvar_sig VARCHAR(100),

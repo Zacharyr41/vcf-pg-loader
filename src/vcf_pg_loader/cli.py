@@ -1140,6 +1140,176 @@ def list_pgs(
         raise typer.Exit(1) from None
 
 
+@app.command("import-frequencies")
+def import_frequencies(
+    vcf_path: Annotated[Path, typer.Argument(help="Path to VCF file with population frequencies")],
+    source: Annotated[
+        str,
+        typer.Option(
+            "--source",
+            "-s",
+            help="Frequency source (gnomAD_v2.1, gnomAD_v3, gnomAD_v4, TOPMed)",
+        ),
+    ] = ...,
+    subset: Annotated[
+        str, typer.Option("--subset", help="Data subset (all, controls, non_neuro, non_cancer)")
+    ] = "all",
+    prefix: Annotated[
+        str, typer.Option("--prefix", help="INFO field prefix (e.g., 'gnomad_' for vcfanno)")
+    ] = "",
+    update_popmax: Annotated[
+        bool, typer.Option("--update-popmax/--no-update-popmax", help="Update popmax in variants")
+    ] = True,
+    batch_size: Annotated[
+        int, typer.Option("--batch-size", "-b", help="Batch size for imports")
+    ] = 10000,
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+) -> None:
+    """Import population frequencies from gnomAD-annotated VCF.
+
+    Parses gnomAD INFO fields for all populations (AFR, AMR, ASJ, EAS, FIN, NFE, SAS)
+    and stores them in the normalized population_frequencies table. Automatically
+    computes popmax (excluding bottlenecked populations ASJ/FIN) and updates variants.
+
+    Supports:
+    - Direct gnomAD VCF files
+    - Pre-annotated VCF files (via vcfanno)
+    - gnomAD v2, v3, v4 formats
+    - TOPMed format
+
+    Example:
+        vcf-pg-loader import-frequencies annotated.vcf.gz -s gnomAD_v3 --db postgresql://...
+    """
+    setup_logging(verbose, quiet)
+
+    if not vcf_path.exists():
+        console.print(f"[red]Error: VCF file not found: {vcf_path}[/red]")
+        raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    from .annotations import PopulationFreqLoader, PopulationFreqSchemaManager
+
+    async def run_import() -> dict:
+        import cyvcf2
+
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            popfreq_schema = PopulationFreqSchemaManager()
+            await popfreq_schema.create_population_frequencies_table(conn)
+            await popfreq_schema.create_popfreq_indexes(conn)
+
+            variant_lookup = await _build_variant_lookup(conn)
+
+            loader = PopulationFreqLoader(batch_size=batch_size)
+            vcf = cyvcf2.VCF(str(vcf_path))
+
+            total_variants = 0
+            matched_variants = 0
+            frequencies_inserted = 0
+            batch = []
+
+            for variant in vcf:
+                total_variants += 1
+                chrom = variant.CHROM
+                if not chrom.startswith("chr"):
+                    chrom = f"chr{chrom}"
+
+                key = (chrom, variant.POS, variant.REF, variant.ALT[0] if variant.ALT else "")
+                variant_id = variant_lookup.get(key)
+
+                if variant_id is None:
+                    continue
+
+                matched_variants += 1
+                info_dict = _extract_info_dict(variant)
+                batch.append((variant_id, info_dict))
+
+                if len(batch) >= batch_size:
+                    result = await loader.import_batch_frequencies(
+                        conn=conn,
+                        batch=batch,
+                        source=source,
+                        subset=subset,
+                        prefix=prefix,
+                        update_popmax=update_popmax,
+                    )
+                    frequencies_inserted += result["frequencies_inserted"]
+                    batch = []
+
+            if batch:
+                result = await loader.import_batch_frequencies(
+                    conn=conn,
+                    batch=batch,
+                    source=source,
+                    subset=subset,
+                    prefix=prefix,
+                    update_popmax=update_popmax,
+                )
+                frequencies_inserted += result["frequencies_inserted"]
+
+            vcf.close()
+
+            return {
+                "total_variants": total_variants,
+                "matched_variants": matched_variants,
+                "frequencies_inserted": frequencies_inserted,
+            }
+        finally:
+            await conn.close()
+
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=console,
+            disable=quiet,
+        ) as progress:
+            progress.add_task("Importing frequencies...", total=None)
+            result = asyncio.run(run_import())
+
+        if not quiet:
+            console.print(f"[green]✓[/green] Imported frequencies from {vcf_path.name}")
+            console.print(f"  Source: {source}")
+            console.print(f"  Variants processed: {result['total_variants']:,}")
+            console.print(f"  Matched variants: {result['matched_variants']:,}")
+            console.print(f"  Frequencies inserted: {result['frequencies_inserted']:,}")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+async def _build_variant_lookup(conn: asyncpg.Connection) -> dict[tuple, int]:
+    """Build lookup dict mapping (chrom, pos, ref, alt) to variant_id."""
+    rows = await conn.fetch("""
+        SELECT variant_id, chrom, pos, ref, alt
+        FROM variants
+    """)
+    return {(row["chrom"], row["pos"], row["ref"], row["alt"]): row["variant_id"] for row in rows}
+
+
+def _extract_info_dict(variant) -> dict:
+    """Extract INFO fields from cyvcf2 variant as dictionary."""
+    info_dict = {}
+    for key in variant.INFO:
+        try:
+            value = variant.INFO.get(key)
+            info_dict[key] = value
+        except Exception:
+            pass
+    return info_dict
+
+
 @app.command("annotate")
 def annotate(
     batch_id: str = typer.Argument(..., help="Load batch ID of variants to annotate"),
