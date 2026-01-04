@@ -169,6 +169,9 @@ class SchemaManager:
                 in_hapmap3 BOOLEAN DEFAULT FALSE,
                 hapmap3_rsid VARCHAR(20),
 
+                -- LD block annotation (Berisa & Pickrell 2016)
+                ld_block_id INTEGER,
+
                 -- Audit tracking
                 load_batch_id UUID NOT NULL,
                 created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
@@ -327,6 +330,12 @@ class SchemaManager:
             CREATE INDEX IF NOT EXISTS idx_hapmap3_variants
             ON variants (chrom, pos)
             WHERE in_hapmap3 = TRUE
+        """)
+
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_variants_ld_block
+            ON variants (ld_block_id)
+            WHERE ld_block_id IS NOT NULL
         """)
 
     async def drop_indexes(self, conn: asyncpg.Connection) -> list[str]:

@@ -1623,20 +1623,115 @@ def db_reset(
         raise typer.Exit(1) from None
 
 
+def _load_ld_blocks(
+    bed_path: Path | None,
+    build: str,
+    population: str | None,
+    db_url: str | None,
+    quiet: bool,
+) -> None:
+    """Helper to load LD blocks."""
+    if population is None:
+        console.print("[red]Error: --population is required for ld-blocks[/red]")
+        raise typer.Exit(1)
+
+    population = population.upper()
+    if population not in ("EUR", "AFR", "EAS", "SAS"):
+        console.print(
+            f"[red]Error: Invalid population '{population}'. Use EUR, AFR, EAS, or SAS[/red]"
+        )
+        raise typer.Exit(1)
+
+    build = build.lower()
+    if build not in ("grch37", "grch38"):
+        console.print(f"[red]Error: Invalid build '{build}'. Use grch37 or grch38[/red]")
+        raise typer.Exit(1)
+
+    if bed_path is None:
+        import importlib.resources
+
+        try:
+            with importlib.resources.files("vcf_pg_loader").joinpath(
+                f"data/references/ld_blocks_{population.lower()}_{build}.bed.gz"
+            ) as bundled_path:
+                if bundled_path.exists():
+                    bed_path = Path(bundled_path)
+                else:
+                    data_dir = Path(__file__).parent / "data" / "references"
+                    bed_path = data_dir / f"ld_blocks_{population.lower()}_{build}.bed.gz"
+                    if not bed_path.exists():
+                        bed_path = data_dir / f"ld_blocks_{population.lower()}_{build}.bed"
+        except Exception:
+            data_dir = Path(__file__).parent / "data" / "references"
+            bed_path = data_dir / f"ld_blocks_{population.lower()}_{build}.bed.gz"
+            if not bed_path.exists():
+                bed_path = data_dir / f"ld_blocks_{population.lower()}_{build}.bed"
+
+    if not bed_path.exists():
+        console.print(
+            f"[red]Error: LD blocks file not found: {bed_path}[/red]\n"
+            f"Please provide a path to the LD blocks BED file."
+        )
+        raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    from .references import LDBlockLoader, ReferenceSchemaManager
+
+    async def run_load() -> dict:
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            ref_schema = ReferenceSchemaManager()
+            await ref_schema.create_ld_blocks_table(conn)
+
+            loader = LDBlockLoader()
+            result = await loader.load_berisa_pickrell_blocks(
+                conn=conn,
+                bed_path=bed_path,
+                population=population,
+                build=build,
+            )
+
+            return result
+        finally:
+            await conn.close()
+
+    try:
+        result = asyncio.run(run_load())
+        if not quiet:
+            console.print(f"[green]✓[/green] Loaded {result['blocks_loaded']:,} LD blocks")
+            console.print(f"  Population: {result['population']}")
+            console.print(f"  Build: {result['build']}")
+            console.print(f"  Source: {result['source']}")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
 @app.command("load-reference")
 def load_reference(
     panel_type: Annotated[
         str,
-        typer.Argument(help="Reference panel type (hapmap3)"),
+        typer.Argument(help="Reference panel type (hapmap3, ld-blocks)"),
     ],
-    tsv_path: Annotated[
+    file_path: Annotated[
         Path | None,
-        typer.Argument(help="Path to reference panel TSV file"),
+        typer.Argument(help="Path to reference panel file (TSV or BED)"),
     ] = None,
     build: Annotated[
         str,
         typer.Option("--build", "-b", help="Genome build (grch37 or grch38)"),
     ] = "grch38",
+    population: Annotated[
+        str | None,
+        typer.Option("--population", "-p", help="Population for LD blocks (EUR, AFR, EAS, SAS)"),
+    ] = None,
     db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
@@ -1646,16 +1741,33 @@ def load_reference(
     Reference panels like HapMap3 are used by PRS-CS, LDpred2, and other
     Bayesian PRS methods to restrict analysis to well-characterized SNPs.
 
-    If no TSV path is provided, looks for bundled reference data in the
+    LD blocks from Berisa & Pickrell (2016) are used by PRS-CS and SBayesR
+    to partition the genome into largely independent regions.
+
+    If no file path is provided, looks for bundled reference data in the
     package data directory.
 
     Example:
         vcf-pg-loader load-reference hapmap3 --build grch38
         vcf-pg-loader load-reference hapmap3 /path/to/hapmap3.tsv --build grch37
+        vcf-pg-loader load-reference ld-blocks --population EUR --build grch37
+        vcf-pg-loader load-reference ld-blocks /path/to/blocks.bed --population EUR
     """
     setup_logging(verbose, quiet)
 
-    if panel_type.lower() != "hapmap3":
+    panel_type_lower = panel_type.lower().replace("_", "-")
+    if panel_type_lower not in ("hapmap3", "ld-blocks"):
+        console.print(
+            f"[red]Error: Unknown panel type '{panel_type}'. Supported: hapmap3, ld-blocks[/red]"
+        )
+        raise typer.Exit(1)
+
+    if panel_type_lower == "ld-blocks":
+        _load_ld_blocks(file_path, build, population, db_url, quiet)
+        return
+
+    tsv_path = file_path
+    if panel_type_lower != "hapmap3":
         console.print(f"[red]Error: Unknown panel type '{panel_type}'. Supported: hapmap3[/red]")
         raise typer.Exit(1)
 
@@ -1724,6 +1836,83 @@ def load_reference(
             console.print(f"[green]✓[/green] Loaded {result['variants_loaded']:,} variants")
             console.print(f"  Panel: {result['panel_name']}")
             console.print(f"  Build: {result['build']}")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@app.command("annotate-ld-blocks")
+def annotate_ld_blocks(
+    population: Annotated[
+        str,
+        typer.Option("--population", "-p", help="Population (EUR, AFR, EAS, SAS)"),
+    ] = "EUR",
+    build: Annotated[
+        str | None,
+        typer.Option("--build", "-b", help="Optional genome build filter"),
+    ] = None,
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+) -> None:
+    """Annotate loaded variants with LD block assignments.
+
+    Assigns each variant to the LD block containing its position using
+    efficient range queries. LD blocks must be loaded first using:
+        vcf-pg-loader load-reference ld-blocks --population EUR
+
+    Example:
+        vcf-pg-loader annotate-ld-blocks --population EUR
+        vcf-pg-loader annotate-ld-blocks --population AFR --build grch37
+    """
+    setup_logging(verbose, quiet)
+
+    population = population.upper()
+    if population not in ("EUR", "AFR", "EAS", "SAS"):
+        console.print(
+            f"[red]Error: Invalid population '{population}'. Use EUR, AFR, EAS, or SAS[/red]"
+        )
+        raise typer.Exit(1)
+
+    if build:
+        build = build.lower()
+        if build not in ("grch37", "grch38"):
+            console.print(f"[red]Error: Invalid build '{build}'. Use grch37 or grch38[/red]")
+            raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    from .references import LDBlockLoader, ReferenceSchemaManager
+
+    async def run_annotate() -> int:
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            ref_schema = ReferenceSchemaManager()
+            await ref_schema.add_ld_block_id_column(conn)
+
+            loader = LDBlockLoader()
+            updated = await loader.assign_variants_to_blocks(
+                conn=conn,
+                population=population,
+                build=build,
+            )
+
+            return updated
+        finally:
+            await conn.close()
+
+    try:
+        updated = asyncio.run(run_annotate())
+        if not quiet:
+            console.print(
+                f"[green]✓[/green] Assigned {updated:,} variants to {population} LD blocks"
+            )
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1) from None
