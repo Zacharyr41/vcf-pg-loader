@@ -1,0 +1,20 @@
+###PGS CATALOG SCORING FILE
+#pgs_id=PGS000001
+#trait_name=Type 2 Diabetes
+#trait_ontology_id=EFO_0001360
+#publication_pmid=30297969
+#genome_build=GRCh38
+#weight_type=beta
+#n_variants=10
+#reporting_ancestry=European
+rsID	chr_name	chr_position	effect_allele	other_allele	effect_weight	allelefrequency_effect	locus_name
+rs3094315	1	752566	G	A	0.0234	0.35
+rs3131972	1	752721	A	G	-0.0156	0.42
+rs12124819	1	776546	A	G	0.0312	0.28	AGRN
+rs11240777	1	798959	G	A	-0.0089	0.55
+rs6681049	1	800007	C	T	0.0445	0.18
+rs4970383	1	838555	C	A	-0.0267	0.61
+rs4475691	1	846808	C	T	0.0198	0.33	SAMD11
+rs7537756	1	854250	A	G	-0.0134	0.47
+rs1110052	1	873558	T	G	0.0378	0.22
+rs2272756	1	881627	A	G	-0.0211	0.39	NOC2L

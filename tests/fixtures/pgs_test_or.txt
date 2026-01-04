@@ -1,0 +1,18 @@
+###PGS CATALOG SCORING FILE
+#pgs_id=PGS000002
+#trait_name=Coronary Artery Disease
+#trait_ontology_id=EFO_0001645
+#publication_pmid=29212778
+#genome_build=GRCh38
+#weight_type=OR
+#n_variants=8
+#reporting_ancestry=Multi-ancestry
+rsID	chr_name	chr_position	effect_allele	other_allele	effect_weight	allelefrequency_effect
+rs3094315	1	752566	A	G	1.12	0.65
+rs3131972	1	752721	G	A	0.89	0.58
+rs12124819	1	776546	G	A	1.23	0.72
+rs11240777	1	798959	A	G	0.95	0.45
+rs6681049	1	800007	T	C	1.08	0.82
+rs4970383	1	838555	A	C	0.91	0.39
+rs4475691	1	846808	T	C	1.15	0.67
+rs7537756	1	854250	G	A	0.97	0.53

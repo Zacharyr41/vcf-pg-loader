@@ -1006,6 +1006,140 @@ def list_studies(
         raise typer.Exit(1) from None
 
 
+@app.command("import-pgs")
+def import_pgs(
+    pgs_path: Annotated[Path, typer.Argument(help="Path to PGS Catalog scoring file")],
+    pgs_id: Annotated[
+        str | None,
+        typer.Option("--pgs-id", "-i", help="Override PGS ID from file header"),
+    ] = None,
+    validate_build: Annotated[
+        bool,
+        typer.Option("--validate-build", help="Validate genome build matches database"),
+    ] = False,
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+) -> None:
+    """Import PGS Catalog scoring file for PRS weights.
+
+    Parses PGS Catalog format files with header metadata (###PGS CATALOG SCORING FILE)
+    and imports per-variant weights. Matches variants to existing database variants
+    by chr:pos:ref:alt or rsID.
+
+    Supports advanced PRS features including interaction terms, haplotype effects,
+    and dominance/recessive models.
+
+    Example:
+        vcf-pg-loader import-pgs PGS000001.txt
+        vcf-pg-loader import-pgs PGS000001.txt --validate-build
+    """
+    setup_logging(verbose, quiet)
+
+    if not pgs_path.exists():
+        console.print(f"[red]Error: PGS file not found: {pgs_path}[/red]")
+        raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    from .prs import PGSLoader, PRSSchemaManager
+
+    async def run_import() -> dict:
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            prs_schema = PRSSchemaManager()
+            await prs_schema.create_prs_schema(conn)
+
+            loader = PGSLoader()
+            result = await loader.import_pgs(
+                conn=conn,
+                pgs_path=pgs_path,
+                pgs_id_override=pgs_id,
+                validate_build=validate_build,
+            )
+
+            return result
+        finally:
+            await conn.close()
+
+    try:
+        result = asyncio.run(run_import())
+        if not quiet:
+            console.print(f"[green]✓[/green] Imported {result['weights_imported']:,} weights")
+            console.print(f"  PGS ID: {result['pgs_id']}")
+            console.print(f"  Matched variants: {result['weights_matched']:,}")
+            console.print(f"  Unmatched variants: {result['weights_unmatched']:,}")
+            match_rate = (
+                result["weights_matched"] / result["weights_imported"] * 100
+                if result["weights_imported"] > 0
+                else 0
+            )
+            console.print(f"  Match rate: {match_rate:.1f}%")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@app.command("list-pgs")
+def list_pgs(
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """List all imported PGS Catalog scores."""
+    import json
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_list() -> list:
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            from .prs import PRSSchemaManager
+
+            prs_schema = PRSSchemaManager()
+            if not await prs_schema.verify_prs_schema(conn):
+                return []
+
+            return await prs_schema.list_scores(conn)
+        finally:
+            await conn.close()
+
+    try:
+        scores = asyncio.run(run_list())
+
+        if json_output:
+            console.print(json.dumps(scores, indent=2, default=str))
+        elif scores:
+            for score in scores:
+                console.print(f"[cyan]{score['pgs_id']}[/cyan]")
+                if score.get("trait_name"):
+                    console.print(f"  Trait: {score['trait_name']}")
+                if score.get("weight_type"):
+                    console.print(f"  Weight type: {score['weight_type']}")
+                console.print(f"  Genome build: {score.get('genome_build', 'N/A')}")
+                console.print(f"  Weights: {score.get('weight_count', 0):,}")
+                console.print(f"  Matched: {score.get('matched_count', 0):,}")
+                console.print()
+        else:
+            if not quiet:
+                console.print("[dim]No PGS scores imported[/dim]")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
 @app.command("annotate")
 def annotate(
     batch_id: str = typer.Argument(..., help="Load batch ID of variants to annotate"),
