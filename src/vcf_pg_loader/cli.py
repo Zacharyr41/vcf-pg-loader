@@ -2103,6 +2103,89 @@ def compute_sample_qc(
         raise typer.Exit(1) from None
 
 
+@app.command("refresh-views")
+def refresh_views(
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    concurrent: bool = typer.Option(
+        True, "--concurrent/--no-concurrent", help="Use CONCURRENTLY to avoid blocking reads"
+    ),
+    create: bool = typer.Option(False, "--create", help="Create views if they don't exist"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+) -> None:
+    """Refresh PRS materialized views.
+
+    Refreshes pre-computed materialized views for common PRS query patterns:
+    - prs_candidate_variants: HapMap3 variants passing QC filters
+    - variant_qc_summary: Aggregate QC counts
+    - chromosome_variant_counts: Per-chromosome summary
+
+    Use --concurrent (default) to refresh without blocking reads.
+    Use --create to create views if they don't exist.
+
+    Example:
+        vcf-pg-loader refresh-views --db postgresql://localhost/variants
+        vcf-pg-loader refresh-views --create --no-concurrent
+    """
+    setup_logging(verbose, quiet)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    from .views.prs_views import PRSViewsManager
+
+    async def run_refresh() -> dict[str, float]:
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            mgr = PRSViewsManager()
+
+            views_exist = await mgr.verify_prs_views(conn)
+            if not views_exist:
+                if create:
+                    if not quiet:
+                        console.print("Creating PRS materialized views...")
+                    await mgr.create_prs_materialized_views(conn)
+                else:
+                    console.print(
+                        "[red]Error: PRS views do not exist. Use --create to create them.[/red]"
+                    )
+                    raise typer.Exit(1)
+
+            if not quiet:
+                mode = "concurrently" if concurrent else "blocking"
+                console.print(f"Refreshing PRS views ({mode})...")
+
+            timings = await mgr.refresh_prs_views(conn, concurrent=concurrent)
+            return timings
+        finally:
+            await conn.close()
+
+    try:
+        timings = asyncio.run(run_refresh())
+
+        if json_output:
+            import json as json_module
+
+            console.print(json_module.dumps(timings, indent=2))
+        elif not quiet:
+            console.print("[green]✓[/green] PRS views refreshed")
+            for view_name, elapsed in timings.items():
+                console.print(f"  {view_name}: {elapsed:.3f}s")
+            total = sum(timings.values())
+            console.print(f"  Total: {total:.3f}s")
+    except Exception as e:
+        if not isinstance(e, SystemExit):
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from None
+        raise
+
+
 audit_app = typer.Typer(help="HIPAA audit log management and verification")
 app.add_typer(audit_app, name="audit")
 

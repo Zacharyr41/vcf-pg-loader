@@ -8,6 +8,7 @@ from .data.schema import DisposalSchemaManager
 from .genotypes.schema import GenotypesSchemaManager
 from .phi.schema import PHISchemaManager
 from .security.schema import SecuritySchemaManager
+from .views.prs_views import PRSViewsManager
 
 HUMAN_CHROMOSOMES = [
     "chr1",
@@ -49,6 +50,7 @@ class SchemaManager:
         self._disposal_manager = DisposalSchemaManager()
         self._security_manager = SecuritySchemaManager()
         self._genotypes_manager = GenotypesSchemaManager()
+        self._prs_views_manager = PRSViewsManager()
 
     async def create_schema(
         self,
@@ -475,3 +477,35 @@ class SchemaManager:
     async def get_genotype_stats(self, conn: asyncpg.Connection) -> dict:
         """Get genotypes table statistics."""
         return await self._genotypes_manager.get_genotype_stats(conn)
+
+    async def create_prs_views(self, conn: asyncpg.Connection) -> None:
+        """Create PRS materialized views for optimized query patterns.
+
+        Creates materialized views for:
+        - prs_candidate_variants: HapMap3 variants passing QC filters
+        - variant_qc_summary: Aggregate QC counts
+        - chromosome_variant_counts: Per-chromosome summary
+        """
+        await self._prs_views_manager.create_prs_materialized_views(conn)
+
+    async def refresh_prs_views(
+        self, conn: asyncpg.Connection, concurrent: bool = True
+    ) -> dict[str, float]:
+        """Refresh PRS materialized views.
+
+        Args:
+            conn: Database connection
+            concurrent: If True, use CONCURRENTLY to avoid blocking reads
+
+        Returns:
+            Dictionary mapping view name to refresh time in seconds
+        """
+        return await self._prs_views_manager.refresh_prs_views(conn, concurrent=concurrent)
+
+    async def verify_prs_views(self, conn: asyncpg.Connection) -> bool:
+        """Verify PRS materialized views exist."""
+        return await self._prs_views_manager.verify_prs_views(conn)
+
+    async def drop_prs_views(self, conn: asyncpg.Connection) -> None:
+        """Drop PRS materialized views."""
+        await self._prs_views_manager.drop_prs_views(conn)
