@@ -154,6 +154,13 @@ class SchemaManager:
                 mac INTEGER CHECK (mac >= 0),
                 hwe_p REAL CHECK (hwe_p >= 0 AND hwe_p <= 1),
 
+                -- Imputation quality metrics
+                info_score REAL CHECK (info_score >= 0 AND info_score <= 1),
+                imputation_r2 REAL CHECK (imputation_r2 >= 0 AND imputation_r2 <= 1),
+                is_imputed BOOLEAN DEFAULT FALSE,
+                is_typed BOOLEAN DEFAULT FALSE,
+                imputation_source VARCHAR(50),
+
                 -- Audit tracking
                 load_batch_id UUID NOT NULL,
                 created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
@@ -294,6 +301,18 @@ class SchemaManager:
             CREATE INDEX IF NOT EXISTS idx_variants_transcript
             ON variants (transcript)
             WHERE transcript IS NOT NULL
+        """)
+
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_variants_info_score
+            ON variants (info_score)
+            WHERE info_score IS NOT NULL
+        """)
+
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_variants_imputed
+            ON variants (is_imputed, info_score)
+            WHERE is_imputed = TRUE
         """)
 
     async def drop_indexes(self, conn: asyncpg.Connection) -> list[str]:

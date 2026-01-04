@@ -42,6 +42,11 @@ VARIANT_COLUMNS: list[str] = [
     "maf",
     "mac",
     "hwe_p",
+    "info_score",
+    "imputation_r2",
+    "is_imputed",
+    "is_typed",
+    "imputation_source",
 ]
 
 VARIANT_COLUMNS_BASIC: list[str] = [
@@ -72,6 +77,11 @@ VARIANT_COLUMNS_BASIC: list[str] = [
     "maf",
     "mac",
     "hwe_p",
+    "info_score",
+    "imputation_r2",
+    "is_imputed",
+    "is_typed",
+    "imputation_source",
 ]
 
 
@@ -108,6 +118,11 @@ def get_record_values(record: VariantRecord, load_batch_id: UUID) -> tuple:
         record.maf,
         record.mac,
         record.hwe_p,
+        record.info_score,
+        record.imputation_r2,
+        record.is_imputed,
+        record.is_typed,
+        record.imputation_source,
     )
 
 
@@ -157,4 +172,9 @@ def get_record_values_full(
         record.maf,
         record.mac,
         record.hwe_p,
+        record.info_score,
+        record.imputation_r2,
+        record.is_imputed,
+        record.is_typed,
+        record.imputation_source,
     )

@@ -60,6 +60,13 @@ class VariantRecord:
     mac: int | None = None
     hwe_p: float | None = None
 
+    # Imputation quality metrics
+    info_score: float | None = None
+    imputation_r2: float | None = None
+    is_imputed: bool = False
+    is_typed: bool = False
+    imputation_source: str | None = None
+
     @property
     def variant_type(self) -> str:
         """Classify variant type based on REF and ALT alleles."""

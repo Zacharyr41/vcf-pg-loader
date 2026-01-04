@@ -307,6 +307,20 @@ def load(
             "Default: enabled. Use --no-hipaa-mode for local development.",
         ),
     ] = None,
+    min_info_score: Annotated[
+        float | None,
+        typer.Option(
+            "--min-info-score",
+            help="Filter imputed variants below this R²/INFO threshold (e.g., 0.8)",
+        ),
+    ] = None,
+    imputation_source: Annotated[
+        str,
+        typer.Option(
+            "--imputation-source",
+            help="Imputation source: minimac4, beagle, impute2, or auto (default: auto-detect)",
+        ),
+    ] = "auto",
 ) -> None:
     """Load a VCF file into PostgreSQL.
 
@@ -363,6 +377,8 @@ def load(
             sanitize_headers=sanitize_headers,
             phi_scan=phi_scan,
             fail_on_phi=fail_on_phi,
+            min_info_score=min_info_score,
+            imputation_source=imputation_source,
         )
     else:
         tls_config = TLSConfig(require_tls=require_tls)
@@ -378,6 +394,8 @@ def load(
             sanitize_headers=sanitize_headers,
             phi_scan=phi_scan,
             fail_on_phi=fail_on_phi,
+            min_info_score=min_info_score,
+            imputation_source=imputation_source,
         )
 
     loader = VCFLoader(resolved_db_url, config)
@@ -420,12 +438,20 @@ def load(
             }
         else:
             if not quiet:
-                console.print(f"[green]✓[/green] Loaded {result['variants_loaded']:,} variants")
+                variants_skipped = result.get("variants_skipped", 0)
+                if variants_skipped > 0:
+                    console.print(
+                        f"[green]✓[/green] Loaded {result['variants_loaded']:,} variants "
+                        f"(skipped {variants_skipped:,} with INFO < {min_info_score})"
+                    )
+                else:
+                    console.print(f"[green]✓[/green] Loaded {result['variants_loaded']:,} variants")
                 console.print(f"  Batch ID: {result['load_batch_id']}")
                 console.print(f"  File SHA256: {result['file_hash']}")
             report_data = {
                 "status": "success",
                 "variants_loaded": result.get("variants_loaded", 0),
+                "variants_skipped": result.get("variants_skipped", 0),
                 "load_batch_id": str(result.get("load_batch_id", "")),
                 "file_hash": result.get("file_hash", ""),
             }

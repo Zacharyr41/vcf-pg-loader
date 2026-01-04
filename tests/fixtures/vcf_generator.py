@@ -58,16 +58,11 @@ class VCFGenerator:
 """
 
     @classmethod
-    def generate(
-        cls, variants: list[SyntheticVariant], samples: list[str] | None = None
-    ) -> str:
+    def generate(cls, variants: list[SyntheticVariant], samples: list[str] | None = None) -> str:
         """Generate a minimal VCF string."""
         samples = samples or ["SAMPLE1"]
         lines = [cls.HEADER_TEMPLATE.strip()]
-        lines.append(
-            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t"
-            + "\t".join(samples)
-        )
+        lines.append("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t" + "\t".join(samples))
 
         for v in variants:
             info_str = cls._format_info(v.info) if v.info else "."
@@ -89,8 +84,7 @@ class VCFGenerator:
 
             line = (
                 f"{v.chrom}\t{v.pos}\t{v.rs_id}\t{v.ref}\t{alt_str}\t{qual_str}\t"
-                f"{v.filter}\t{info_str}\t{':'.join(format_keys)}\t"
-                + "\t".join(sample_cols)
+                f"{v.filter}\t{info_str}\t{':'.join(format_keys)}\t" + "\t".join(sample_cols)
             )
             lines.append(line)
 
@@ -102,9 +96,7 @@ class VCFGenerator:
     ) -> Path:
         """Generate a VCF file and return the path."""
         content = cls.generate(variants, samples)
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".vcf", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".vcf", delete=False) as f:
             f.write(content)
             return Path(f.name)
 
@@ -124,89 +116,97 @@ class VCFGenerator:
 def make_multiallelic_vcf(n_alts: int = 3) -> str:
     """VCF with multi-allelic site for Number=A/R/G testing."""
     alts = ["G", "T", "C"][:n_alts]
-    return VCFGenerator.generate([
-        SyntheticVariant(
-            chrom="chr1",
-            pos=100,
-            ref="A",
-            alt=alts,
-            info={
-                "AF": [0.1] * n_alts,
-                "AC": [10] * n_alts,
-                "AD": [100] + [10] * n_alts,
-                "AN": 200,
-            },
-        )
-    ])
+    return VCFGenerator.generate(
+        [
+            SyntheticVariant(
+                chrom="chr1",
+                pos=100,
+                ref="A",
+                alt=alts,
+                info={
+                    "AF": [0.1] * n_alts,
+                    "AC": [10] * n_alts,
+                    "AD": [100] + [10] * n_alts,
+                    "AN": 200,
+                },
+            )
+        ]
+    )
 
 
 def make_multiallelic_vcf_file(n_alts: int = 3) -> Path:
     """VCF file with multi-allelic site for Number=A/R/G testing."""
     alts = ["G", "T", "C"][:n_alts]
-    return VCFGenerator.generate_file([
-        SyntheticVariant(
-            chrom="chr1",
-            pos=100,
-            ref="A",
-            alt=alts,
-            info={
-                "AF": [0.1] * n_alts,
-                "AC": [10] * n_alts,
-                "AD": [100] + [10] * n_alts,
-                "AN": 200,
-            },
-        )
-    ])
+    return VCFGenerator.generate_file(
+        [
+            SyntheticVariant(
+                chrom="chr1",
+                pos=100,
+                ref="A",
+                alt=alts,
+                info={
+                    "AF": [0.1] * n_alts,
+                    "AC": [10] * n_alts,
+                    "AD": [100] + [10] * n_alts,
+                    "AN": 200,
+                },
+            )
+        ]
+    )
 
 
 def make_unnormalized_vcf() -> str:
     """VCF with variants requiring normalization."""
-    return VCFGenerator.generate([
-        SyntheticVariant(chrom="chr1", pos=100, ref="ATG", alt=["AG"]),
-        SyntheticVariant(chrom="chr1", pos=200, ref="GATC", alt=["GTTC"]),
-        SyntheticVariant(chrom="chr1", pos=300, ref="A", alt=["G"]),
-    ])
+    return VCFGenerator.generate(
+        [
+            SyntheticVariant(chrom="chr1", pos=100, ref="ATG", alt=["AG"]),
+            SyntheticVariant(chrom="chr1", pos=200, ref="GATC", alt=["GTTC"]),
+            SyntheticVariant(chrom="chr1", pos=300, ref="A", alt=["G"]),
+        ]
+    )
 
 
 def make_unnormalized_vcf_file() -> Path:
     """VCF file with variants requiring normalization."""
-    return VCFGenerator.generate_file([
-        SyntheticVariant(chrom="chr1", pos=100, ref="ATG", alt=["AG"]),
-        SyntheticVariant(chrom="chr1", pos=200, ref="GATC", alt=["GTTC"]),
-        SyntheticVariant(chrom="chr1", pos=300, ref="A", alt=["G"]),
-    ])
+    return VCFGenerator.generate_file(
+        [
+            SyntheticVariant(chrom="chr1", pos=100, ref="ATG", alt=["AG"]),
+            SyntheticVariant(chrom="chr1", pos=200, ref="GATC", alt=["GTTC"]),
+            SyntheticVariant(chrom="chr1", pos=300, ref="A", alt=["G"]),
+        ]
+    )
 
 
 def make_vep_csq_vcf() -> str:
     """VCF with VEP CSQ annotations matching nf-core/sarek output."""
-    csq = (
-        "T|missense_variant|MODERATE|BRCA1|ENSG00000012048|Transcript|ENST00000357654"
+    csq = "T|missense_variant|MODERATE|BRCA1|ENSG00000012048|Transcript|ENST00000357654"
+    return VCFGenerator.generate(
+        [
+            SyntheticVariant(
+                chrom="chr17",
+                pos=43094464,
+                ref="C",
+                alt=["T"],
+                info={"CSQ": csq},
+            )
+        ]
     )
-    return VCFGenerator.generate([
-        SyntheticVariant(
-            chrom="chr17",
-            pos=43094464,
-            ref="C",
-            alt=["T"],
-            info={"CSQ": csq},
-        )
-    ])
 
 
 def make_vep_csq_vcf_file() -> Path:
     """VCF file with VEP CSQ annotations matching nf-core/sarek output."""
-    csq = (
-        "T|missense_variant|MODERATE|BRCA1|ENSG00000012048|Transcript|ENST00000357654"
+    csq = "T|missense_variant|MODERATE|BRCA1|ENSG00000012048|Transcript|ENST00000357654"
+    return VCFGenerator.generate_file(
+        [
+            SyntheticVariant(
+                chrom="chr17",
+                pos=43094464,
+                ref="C",
+                alt=["T"],
+                info={"CSQ": csq},
+            )
+        ]
     )
-    return VCFGenerator.generate_file([
-        SyntheticVariant(
-            chrom="chr17",
-            pos=43094464,
-            ref="C",
-            alt=["T"],
-            info={"CSQ": csq},
-        )
-    ])
 
 
 def make_trio_vcf() -> str:
@@ -323,56 +323,60 @@ def make_trio_vcf_file() -> Path:
 
 def make_genmod_vcf() -> str:
     """VCF with GENMOD annotations from nf-core/raredisease."""
-    return VCFGenerator.generate([
-        SyntheticVariant(
-            chrom="chr1",
-            pos=1000,
-            ref="A",
-            alt=["G"],
-            info={
-                "GeneticModels": "FAM001:AR_hom",
-                "RankScore": "FAM001:15",
-            },
-        ),
-        SyntheticVariant(
-            chrom="chr2",
-            pos=2000,
-            ref="C",
-            alt=["T"],
-            info={
-                "GeneticModels": "FAM001:AR_comp",
-                "Compounds": "GENE1:chr2_2000_C_T>chr2_2500_G_A",
-                "RankScore": "FAM001:12",
-            },
-        ),
-    ])
+    return VCFGenerator.generate(
+        [
+            SyntheticVariant(
+                chrom="chr1",
+                pos=1000,
+                ref="A",
+                alt=["G"],
+                info={
+                    "GeneticModels": "FAM001:AR_hom",
+                    "RankScore": "FAM001:15",
+                },
+            ),
+            SyntheticVariant(
+                chrom="chr2",
+                pos=2000,
+                ref="C",
+                alt=["T"],
+                info={
+                    "GeneticModels": "FAM001:AR_comp",
+                    "Compounds": "GENE1:chr2_2000_C_T>chr2_2500_G_A",
+                    "RankScore": "FAM001:12",
+                },
+            ),
+        ]
+    )
 
 
 def make_genmod_vcf_file() -> Path:
     """VCF file with GENMOD annotations from nf-core/raredisease."""
-    return VCFGenerator.generate_file([
-        SyntheticVariant(
-            chrom="chr1",
-            pos=1000,
-            ref="A",
-            alt=["G"],
-            info={
-                "GeneticModels": "FAM001:AR_hom",
-                "RankScore": "FAM001:15",
-            },
-        ),
-        SyntheticVariant(
-            chrom="chr2",
-            pos=2000,
-            ref="C",
-            alt=["T"],
-            info={
-                "GeneticModels": "FAM001:AR_comp",
-                "Compounds": "GENE1:chr2_2000_C_T>chr2_2500_G_A",
-                "RankScore": "FAM001:12",
-            },
-        ),
-    ])
+    return VCFGenerator.generate_file(
+        [
+            SyntheticVariant(
+                chrom="chr1",
+                pos=1000,
+                ref="A",
+                alt=["G"],
+                info={
+                    "GeneticModels": "FAM001:AR_hom",
+                    "RankScore": "FAM001:15",
+                },
+            ),
+            SyntheticVariant(
+                chrom="chr2",
+                pos=2000,
+                ref="C",
+                alt=["T"],
+                info={
+                    "GeneticModels": "FAM001:AR_comp",
+                    "Compounds": "GENE1:chr2_2000_C_T>chr2_2500_G_A",
+                    "RankScore": "FAM001:12",
+                },
+            ),
+        ]
+    )
 
 
 def make_snpeff_ann(
@@ -393,24 +397,443 @@ def make_snpeff_ann(
     warning: str = "",
 ) -> str:
     """Build a SnpEff ANN field string."""
-    return "|".join([
-        allele,
-        annotation,
-        impact,
-        gene_name,
-        gene_id,
-        "transcript",
-        transcript,
-        biotype,
-        rank,
-        hgvs_c,
-        hgvs_p,
-        cdna_pos,
-        cds_pos,
-        aa_pos,
-        distance,
-        warning,
-    ])
+    return "|".join(
+        [
+            allele,
+            annotation,
+            impact,
+            gene_name,
+            gene_id,
+            "transcript",
+            transcript,
+            biotype,
+            rank,
+            hgvs_c,
+            hgvs_p,
+            cdna_pos,
+            cds_pos,
+            aa_pos,
+            distance,
+            warning,
+        ]
+    )
+
+
+MINIMAC4_HEADER = """##fileformat=VCFv4.2
+##source=Minimac4
+##INFO=<ID=R2,Number=1,Type=Float,Description="Estimated Imputation Accuracy (R-squared)">
+##INFO=<ID=IMPUTED,Number=0,Type=Flag,Description="Imputed marker">
+##INFO=<ID=TYPED,Number=0,Type=Flag,Description="Typed marker">
+##INFO=<ID=AF,Number=A,Type=Float,Description="Allele Frequency">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##FORMAT=<ID=DS,Number=1,Type=Float,Description="Dosage">
+##contig=<ID=chr1,length=248956422>
+##contig=<ID=chr2,length=242193529>
+"""
+
+BEAGLE_HEADER = """##fileformat=VCFv4.2
+##source=beagle.27Jan18.7e1.jar
+##INFO=<ID=DR2,Number=1,Type=Float,Description="Dosage R-Squared">
+##INFO=<ID=AF,Number=A,Type=Float,Description="Allele Frequency">
+##INFO=<ID=IMP,Number=0,Type=Flag,Description="Imputed marker">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##FORMAT=<ID=DS,Number=1,Type=Float,Description="Dosage">
+##contig=<ID=chr1,length=248956422>
+##contig=<ID=chr2,length=242193529>
+"""
+
+IMPUTE2_HEADER = """##fileformat=VCFv4.2
+##source=IMPUTE2
+##INFO=<ID=INFO,Number=1,Type=Float,Description="IMPUTE2 info score">
+##INFO=<ID=AF,Number=A,Type=Float,Description="Allele Frequency">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##FORMAT=<ID=GP,Number=3,Type=Float,Description="Genotype Probabilities">
+##contig=<ID=chr1,length=248956422>
+##contig=<ID=chr2,length=242193529>
+"""
+
+
+class ImputationVCFGenerator:
+    """Generate imputed VCFs for testing imputation quality metrics."""
+
+    @classmethod
+    def generate_minimac4(
+        cls,
+        variants: list[SyntheticVariant],
+        samples: list[str] | None = None,
+    ) -> str:
+        samples = samples or ["SAMPLE1"]
+        lines = [MINIMAC4_HEADER.strip()]
+        lines.append("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t" + "\t".join(samples))
+
+        for v in variants:
+            info_str = VCFGenerator._format_info(v.info) if v.info else "."
+            alt_str = ",".join(v.alt)
+            qual_str = str(v.qual) if v.qual is not None else "."
+
+            format_keys = ["GT"]
+            if v.format_fields:
+                first_sample = list(v.format_fields.values())[0]
+                format_keys = list(first_sample.keys())
+
+            sample_cols = []
+            for sample in samples:
+                if v.format_fields and sample in v.format_fields:
+                    vals = [str(v.format_fields[sample].get(k, ".")) for k in format_keys]
+                    sample_cols.append(":".join(vals))
+                else:
+                    sample_cols.append("./.")
+
+            line = (
+                f"{v.chrom}\t{v.pos}\t{v.rs_id}\t{v.ref}\t{alt_str}\t{qual_str}\t"
+                f"{v.filter}\t{info_str}\t{':'.join(format_keys)}\t" + "\t".join(sample_cols)
+            )
+            lines.append(line)
+
+        return "\n".join(lines) + "\n"
+
+    @classmethod
+    def generate_minimac4_file(
+        cls,
+        variants: list[SyntheticVariant],
+        samples: list[str] | None = None,
+    ) -> Path:
+        content = cls.generate_minimac4(variants, samples)
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".vcf", delete=False) as f:
+            f.write(content)
+            return Path(f.name)
+
+    @classmethod
+    def generate_beagle(
+        cls,
+        variants: list[SyntheticVariant],
+        samples: list[str] | None = None,
+    ) -> str:
+        samples = samples or ["SAMPLE1"]
+        lines = [BEAGLE_HEADER.strip()]
+        lines.append("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t" + "\t".join(samples))
+
+        for v in variants:
+            info_str = VCFGenerator._format_info(v.info) if v.info else "."
+            alt_str = ",".join(v.alt)
+            qual_str = str(v.qual) if v.qual is not None else "."
+
+            format_keys = ["GT"]
+            if v.format_fields:
+                first_sample = list(v.format_fields.values())[0]
+                format_keys = list(first_sample.keys())
+
+            sample_cols = []
+            for sample in samples:
+                if v.format_fields and sample in v.format_fields:
+                    vals = [str(v.format_fields[sample].get(k, ".")) for k in format_keys]
+                    sample_cols.append(":".join(vals))
+                else:
+                    sample_cols.append("./.")
+
+            line = (
+                f"{v.chrom}\t{v.pos}\t{v.rs_id}\t{v.ref}\t{alt_str}\t{qual_str}\t"
+                f"{v.filter}\t{info_str}\t{':'.join(format_keys)}\t" + "\t".join(sample_cols)
+            )
+            lines.append(line)
+
+        return "\n".join(lines) + "\n"
+
+    @classmethod
+    def generate_beagle_file(
+        cls,
+        variants: list[SyntheticVariant],
+        samples: list[str] | None = None,
+    ) -> Path:
+        content = cls.generate_beagle(variants, samples)
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".vcf", delete=False) as f:
+            f.write(content)
+            return Path(f.name)
+
+    @classmethod
+    def generate_impute2(
+        cls,
+        variants: list[SyntheticVariant],
+        samples: list[str] | None = None,
+    ) -> str:
+        samples = samples or ["SAMPLE1"]
+        lines = [IMPUTE2_HEADER.strip()]
+        lines.append("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t" + "\t".join(samples))
+
+        for v in variants:
+            info_str = VCFGenerator._format_info(v.info) if v.info else "."
+            alt_str = ",".join(v.alt)
+            qual_str = str(v.qual) if v.qual is not None else "."
+
+            format_keys = ["GT"]
+            if v.format_fields:
+                first_sample = list(v.format_fields.values())[0]
+                format_keys = list(first_sample.keys())
+
+            sample_cols = []
+            for sample in samples:
+                if v.format_fields and sample in v.format_fields:
+                    vals = [str(v.format_fields[sample].get(k, ".")) for k in format_keys]
+                    sample_cols.append(":".join(vals))
+                else:
+                    sample_cols.append("./.")
+
+            line = (
+                f"{v.chrom}\t{v.pos}\t{v.rs_id}\t{v.ref}\t{alt_str}\t{qual_str}\t"
+                f"{v.filter}\t{info_str}\t{':'.join(format_keys)}\t" + "\t".join(sample_cols)
+            )
+            lines.append(line)
+
+        return "\n".join(lines) + "\n"
+
+    @classmethod
+    def generate_impute2_file(
+        cls,
+        variants: list[SyntheticVariant],
+        samples: list[str] | None = None,
+    ) -> Path:
+        content = cls.generate_impute2(variants, samples)
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".vcf", delete=False) as f:
+            f.write(content)
+            return Path(f.name)
+
+
+def make_minimac4_vcf() -> str:
+    """VCF with Minimac4 imputation quality metrics."""
+    return ImputationVCFGenerator.generate_minimac4(
+        [
+            SyntheticVariant(
+                chrom="chr1",
+                pos=100,
+                ref="A",
+                alt=["G"],
+                info={"R2": 0.95, "IMPUTED": True, "AF": 0.15},
+            ),
+            SyntheticVariant(
+                chrom="chr1",
+                pos=200,
+                ref="C",
+                alt=["T"],
+                info={"R2": 1.0, "TYPED": True, "AF": 0.30},
+            ),
+            SyntheticVariant(
+                chrom="chr1",
+                pos=300,
+                ref="G",
+                alt=["A"],
+                info={"R2": 0.45, "IMPUTED": True, "AF": 0.05},
+            ),
+            SyntheticVariant(
+                chrom="chr1",
+                pos=400,
+                ref="T",
+                alt=["C"],
+                info={"R2": 0.80, "IMPUTED": True, "AF": 0.22},
+            ),
+        ]
+    )
+
+
+def make_minimac4_vcf_file() -> Path:
+    """VCF file with Minimac4 imputation quality metrics."""
+    return ImputationVCFGenerator.generate_minimac4_file(
+        [
+            SyntheticVariant(
+                chrom="chr1",
+                pos=100,
+                ref="A",
+                alt=["G"],
+                info={"R2": 0.95, "IMPUTED": True, "AF": 0.15},
+            ),
+            SyntheticVariant(
+                chrom="chr1",
+                pos=200,
+                ref="C",
+                alt=["T"],
+                info={"R2": 1.0, "TYPED": True, "AF": 0.30},
+            ),
+            SyntheticVariant(
+                chrom="chr1",
+                pos=300,
+                ref="G",
+                alt=["A"],
+                info={"R2": 0.45, "IMPUTED": True, "AF": 0.05},
+            ),
+            SyntheticVariant(
+                chrom="chr1",
+                pos=400,
+                ref="T",
+                alt=["C"],
+                info={"R2": 0.80, "IMPUTED": True, "AF": 0.22},
+            ),
+        ]
+    )
+
+
+def make_beagle_vcf() -> str:
+    """VCF with Beagle imputation quality metrics."""
+    return ImputationVCFGenerator.generate_beagle(
+        [
+            SyntheticVariant(
+                chrom="chr1",
+                pos=100,
+                ref="A",
+                alt=["G"],
+                info={"DR2": 0.92, "IMP": True, "AF": 0.18},
+            ),
+            SyntheticVariant(
+                chrom="chr1",
+                pos=200,
+                ref="C",
+                alt=["T"],
+                info={"DR2": 1.0, "AF": 0.25},
+            ),
+            SyntheticVariant(
+                chrom="chr1",
+                pos=300,
+                ref="G",
+                alt=["A"],
+                info={"DR2": 0.55, "IMP": True, "AF": 0.08},
+            ),
+        ]
+    )
+
+
+def make_beagle_vcf_file() -> Path:
+    """VCF file with Beagle imputation quality metrics."""
+    return ImputationVCFGenerator.generate_beagle_file(
+        [
+            SyntheticVariant(
+                chrom="chr1",
+                pos=100,
+                ref="A",
+                alt=["G"],
+                info={"DR2": 0.92, "IMP": True, "AF": 0.18},
+            ),
+            SyntheticVariant(
+                chrom="chr1",
+                pos=200,
+                ref="C",
+                alt=["T"],
+                info={"DR2": 1.0, "AF": 0.25},
+            ),
+            SyntheticVariant(
+                chrom="chr1",
+                pos=300,
+                ref="G",
+                alt=["A"],
+                info={"DR2": 0.55, "IMP": True, "AF": 0.08},
+            ),
+        ]
+    )
+
+
+def make_impute2_vcf() -> str:
+    """VCF with IMPUTE2 imputation quality metrics."""
+    return ImputationVCFGenerator.generate_impute2(
+        [
+            SyntheticVariant(
+                chrom="chr1",
+                pos=100,
+                ref="A",
+                alt=["G"],
+                info={"INFO": 0.88, "AF": 0.12},
+            ),
+            SyntheticVariant(
+                chrom="chr1",
+                pos=200,
+                ref="C",
+                alt=["T"],
+                info={"INFO": 0.99, "AF": 0.35},
+            ),
+            SyntheticVariant(
+                chrom="chr1",
+                pos=300,
+                ref="G",
+                alt=["A"],
+                info={"INFO": 0.62, "AF": 0.03},
+            ),
+        ]
+    )
+
+
+def make_impute2_vcf_file() -> Path:
+    """VCF file with IMPUTE2 imputation quality metrics."""
+    return ImputationVCFGenerator.generate_impute2_file(
+        [
+            SyntheticVariant(
+                chrom="chr1",
+                pos=100,
+                ref="A",
+                alt=["G"],
+                info={"INFO": 0.88, "AF": 0.12},
+            ),
+            SyntheticVariant(
+                chrom="chr1",
+                pos=200,
+                ref="C",
+                alt=["T"],
+                info={"INFO": 0.99, "AF": 0.35},
+            ),
+            SyntheticVariant(
+                chrom="chr1",
+                pos=300,
+                ref="G",
+                alt=["A"],
+                info={"INFO": 0.62, "AF": 0.03},
+            ),
+        ]
+    )
+
+
+def make_mixed_imputation_vcf_file() -> Path:
+    """VCF file with mixed typed and imputed variants for filtering tests."""
+    return ImputationVCFGenerator.generate_minimac4_file(
+        [
+            SyntheticVariant(
+                chrom="chr1",
+                pos=100,
+                ref="A",
+                alt=["G"],
+                info={"R2": 0.95, "IMPUTED": True},
+            ),
+            SyntheticVariant(
+                chrom="chr1",
+                pos=200,
+                ref="C",
+                alt=["T"],
+                info={"R2": 0.60, "IMPUTED": True},
+            ),
+            SyntheticVariant(
+                chrom="chr1",
+                pos=300,
+                ref="G",
+                alt=["A"],
+                info={"R2": 0.79, "IMPUTED": True},
+            ),
+            SyntheticVariant(
+                chrom="chr1",
+                pos=400,
+                ref="T",
+                alt=["C"],
+                info={"R2": 0.80, "IMPUTED": True},
+            ),
+            SyntheticVariant(
+                chrom="chr1",
+                pos=500,
+                ref="A",
+                alt=["T"],
+                info={"R2": 1.0, "TYPED": True},
+            ),
+            SyntheticVariant(
+                chrom="chr1",
+                pos=600,
+                ref="C",
+                alt=["G"],
+                info={"R2": 0.50, "IMPUTED": True},
+            ),
+        ]
+    )
 
 
 def make_snpeff_ann_vcf_file() -> Path:
@@ -463,26 +886,28 @@ def make_snpeff_ann_vcf_file() -> Path:
             ref="G",
             alt=["A"],
             info={
-                "ANN": ",".join([
-                    make_snpeff_ann(
-                        allele="A",
-                        annotation="splice_acceptor_variant",
-                        impact="HIGH",
-                        gene_name="TP53",
-                        gene_id="ENSG00000141510",
-                        transcript="ENST00000269305",
-                        hgvs_c="c.673-2G>A",
-                    ),
-                    make_snpeff_ann(
-                        allele="A",
-                        annotation="downstream_gene_variant",
-                        impact="MODIFIER",
-                        gene_name="WRAP53",
-                        gene_id="ENSG00000141499",
-                        transcript="ENST00000357449",
-                        distance="4500",
-                    ),
-                ]),
+                "ANN": ",".join(
+                    [
+                        make_snpeff_ann(
+                            allele="A",
+                            annotation="splice_acceptor_variant",
+                            impact="HIGH",
+                            gene_name="TP53",
+                            gene_id="ENSG00000141510",
+                            transcript="ENST00000269305",
+                            hgvs_c="c.673-2G>A",
+                        ),
+                        make_snpeff_ann(
+                            allele="A",
+                            annotation="downstream_gene_variant",
+                            impact="MODIFIER",
+                            gene_name="WRAP53",
+                            gene_id="ENSG00000141499",
+                            transcript="ENST00000357449",
+                            distance="4500",
+                        ),
+                    ]
+                ),
                 "gnomAD_AF": 0.0001,
             },
         ),

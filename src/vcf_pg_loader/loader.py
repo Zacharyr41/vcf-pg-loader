@@ -14,6 +14,7 @@ import asyncpg
 
 from .audit import AuditEvent, AuditEventType, AuditLogger
 from .models import VariantRecord
+from .parsers.imputation import ImputationConfig
 from .phi.header_sanitizer import PHIScanner, SanitizationConfig
 from .schema import SchemaManager
 from .tls import TLSConfig, TLSError, get_ssl_param_for_asyncpg, verify_tls_connection
@@ -109,6 +110,8 @@ class LoadConfig:
     phi_scan: bool = False
     fail_on_phi: bool = False
     sanitization_config: SanitizationConfig | None = None
+    min_info_score: float | None = None
+    imputation_source: str = "auto"
 
 
 class VCFLoader:
@@ -278,6 +281,13 @@ class VCFLoader:
                         "Use --no-fail-on-phi to load anyway."
                     )
 
+        imputation_config = None
+        if self.config.min_info_score is not None or self.config.imputation_source != "auto":
+            imputation_config = ImputationConfig(
+                source=self.config.imputation_source,
+                min_info_score=self.config.min_info_score,
+            )
+
         streaming_parser = VCFStreamingParser(
             vcf_path,
             batch_size=self.config.batch_size,
@@ -285,6 +295,7 @@ class VCFLoader:
             human_genome=self.config.human_genome,
             sanitize_headers=self.config.sanitize_headers,
             sanitization_config=self.config.sanitization_config,
+            imputation_config=imputation_config,
         )
 
         if self.config.sanitize_headers:
@@ -369,9 +380,21 @@ class VCFLoader:
                     await self._schema_manager.create_indexes(conn)
 
             await self._complete_audit(total_loaded)
-            self.logger.info(
-                "Completed load: %d variants loaded (batch_id=%s)", total_loaded, self.load_batch_id
-            )
+            skipped_count = streaming_parser.skipped_by_info_score
+            if skipped_count > 0:
+                self.logger.info(
+                    "Completed load: %d variants loaded (skipped %d with INFO < %.2f) (batch_id=%s)",
+                    total_loaded,
+                    skipped_count,
+                    self.config.min_info_score,
+                    self.load_batch_id,
+                )
+            else:
+                self.logger.info(
+                    "Completed load: %d variants loaded (batch_id=%s)",
+                    total_loaded,
+                    self.load_batch_id,
+                )
 
             if self._audit_logger:
                 await self._audit_logger.log_event(
@@ -384,6 +407,7 @@ class VCFLoader:
                         details={
                             "file_name": vcf_path.name,
                             "variants_loaded": total_loaded,
+                            "variants_skipped_info_score": skipped_count,
                             "parallel": parallel,
                         },
                     )
@@ -400,6 +424,8 @@ class VCFLoader:
             if is_reload:
                 result["is_reload"] = True
                 result["previous_load_id"] = str(previous_load_id)
+            if skipped_count > 0:
+                result["variants_skipped"] = skipped_count
 
             return result
 

@@ -9,6 +9,12 @@ from cyvcf2 import VCF
 
 from .models import VariantRecord
 from .normalizer import normalize_variant
+from .parsers.imputation import (
+    ImputationConfig,
+    ImputationSource,
+    detect_imputation_source,
+    extract_imputation_metrics,
+)
 from .phi.header_sanitizer import (
     SanitizationConfig,
     SanitizationReport,
@@ -272,10 +278,14 @@ class VariantParser:
         header_parser: VCFHeaderParser | None = None,
         normalize: bool = False,
         human_genome: bool = True,
+        imputation_config: ImputationConfig | None = None,
+        imputation_source: ImputationSource | None = None,
     ):
         self.header_parser = header_parser
         self.normalize = normalize
         self.human_genome = human_genome
+        self.imputation_config = imputation_config
+        self.imputation_source = imputation_source
 
     def parse_variant(
         self, variant, csq_fields: list[str], ann_fields: list[str] | None = None
@@ -364,6 +374,14 @@ class VariantParser:
                     record.consequence = info_dict.get("Consequence")
                 if record.impact is None:
                     record.impact = info_dict.get("IMPACT")
+
+            if self.imputation_source is not None:
+                metrics = extract_imputation_metrics(info_dict, self.imputation_source)
+                record.info_score = metrics.info_score
+                record.imputation_r2 = metrics.imputation_r2
+                record.is_imputed = metrics.is_imputed
+                record.is_typed = metrics.is_typed
+                record.imputation_source = metrics.source
 
             records.append(record)
 
@@ -512,17 +530,21 @@ class VCFStreamingParser:
         human_genome: bool = True,
         sanitize_headers: bool = False,
         sanitization_config: SanitizationConfig | None = None,
+        imputation_config: ImputationConfig | None = None,
     ):
         self.vcf_path = Path(vcf_path) if isinstance(vcf_path, str) else vcf_path
         self.batch_size = batch_size if batch_size is not None else self.DEFAULT_BATCH_SIZE
         self.normalize = normalize
         self.human_genome = human_genome
         self._sanitize_headers = sanitize_headers
+        self._imputation_config = imputation_config
+        self._imputation_source: ImputationSource | None = None
 
         self._vcf: VCF | None = None
         self._closed = False
         self._variant_count = 0
         self._record_count = 0
+        self._skipped_by_info_score = 0
 
         sanitizer = VCFHeaderSanitizer(sanitization_config) if sanitize_headers else None
         self.header_parser = VCFHeaderParser(
@@ -535,6 +557,13 @@ class VCFStreamingParser:
         """Initialize VCF reader and parse header."""
         self._vcf = VCF(str(self.vcf_path))
         self.header_parser.parse_from_vcf(self._vcf)
+
+        if self._imputation_config is not None:
+            source_enum = self._imputation_config.get_source_enum()
+            if source_enum == ImputationSource.AUTO:
+                self._imputation_source = detect_imputation_source(self._vcf.raw_header)
+            else:
+                self._imputation_source = source_enum
 
     @property
     def samples(self) -> list[str]:
@@ -555,6 +584,16 @@ class VCFStreamingParser:
     def sanitization_result(self) -> SanitizedHeader | None:
         """Return sanitization result if sanitization was performed."""
         return self.header_parser.sanitization_result
+
+    @property
+    def skipped_by_info_score(self) -> int:
+        """Return count of records skipped due to info score filtering."""
+        return self._skipped_by_info_score
+
+    @property
+    def detected_imputation_source(self) -> ImputationSource | None:
+        """Return the detected or configured imputation source."""
+        return self._imputation_source
 
     def get_sanitization_report(self, source_file: str) -> SanitizationReport | None:
         """Get sanitization report for audit logging."""
@@ -583,10 +622,18 @@ class VCFStreamingParser:
             self._init_vcf()
 
         variant_parser = VariantParser(
-            self.header_parser, normalize=self.normalize, human_genome=self.human_genome
+            self.header_parser,
+            normalize=self.normalize,
+            human_genome=self.human_genome,
+            imputation_config=self._imputation_config,
+            imputation_source=self._imputation_source,
         )
         csq_fields = self.header_parser.csq_fields
         ann_fields = self.header_parser.ann_fields
+
+        min_info_score = None
+        if self._imputation_config is not None:
+            min_info_score = self._imputation_config.min_info_score
 
         batch: list[VariantRecord] = []
 
@@ -595,6 +642,10 @@ class VCFStreamingParser:
             records = variant_parser.parse_variant(variant, csq_fields, ann_fields)
 
             for record in records:
+                if min_info_score is not None:
+                    if record.info_score is not None and record.info_score < min_info_score:
+                        self._skipped_by_info_score += 1
+                        continue
                 self._record_count += 1
                 batch.append(record)
 
