@@ -48,6 +48,38 @@ HapMap3 SNPs (~1.1M variants) are commonly used for:
 - **SBayesR**: Summary-based Bayesian PRS
 - **Quality control**: High-quality, well-characterized variants
 
+#### Downloading HapMap3 Data
+
+The easiest way to get HapMap3 data is using the CLI:
+
+```bash
+# Download HapMap3 for GRCh38 (default)
+vcf-pg-loader download-reference hapmap3
+
+# Download for GRCh37
+vcf-pg-loader download-reference hapmap3 --build grch37
+
+# Force re-download
+vcf-pg-loader download-reference hapmap3 --force
+
+# Custom output directory
+vcf-pg-loader download-reference hapmap3 --output /path/to/refs
+```
+
+Files are cached at `~/.vcf-pg-loader/references/` by default. The data is sourced from LDpred2's authoritative HapMap3+ variant list on figshare.
+
+#### Loading HapMap3 into the Database
+
+After downloading, load into the database:
+
+```bash
+# Uses cached download automatically
+vcf-pg-loader load-reference hapmap3 --build grch38 --db postgresql://localhost/prs_db
+
+# Or provide your own file
+vcf-pg-loader load-reference hapmap3 /path/to/hapmap3.tsv --db postgresql://localhost/prs_db
+```
+
 ### Usage Examples
 
 #### Check HapMap3 coverage

@@ -1764,6 +1764,92 @@ def _load_ld_blocks(
         raise typer.Exit(1) from None
 
 
+@app.command("download-reference")
+def download_reference(
+    panel_type: Annotated[
+        str,
+        typer.Argument(help="Reference panel type (hapmap3)"),
+    ],
+    build: Annotated[
+        str,
+        typer.Option("--build", "-b", help="Genome build (grch37 or grch38)"),
+    ] = "grch38",
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Output directory for downloaded files"),
+    ] = None,
+    force: bool = typer.Option(False, "--force", "-f", help="Force re-download even if cached"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+) -> None:
+    """Download reference panel data for PRS analysis.
+
+    Downloads HapMap3 (~1.1M SNPs) from authoritative sources (LDpred2 figshare).
+    Files are cached locally for reuse.
+
+    Example:
+        vcf-pg-loader download-reference hapmap3 --build grch38
+        vcf-pg-loader download-reference hapmap3 --build grch37 --force
+        vcf-pg-loader download-reference hapmap3 --output /custom/path
+    """
+    setup_logging(verbose, quiet)
+
+    panel_type_lower = panel_type.lower().replace("_", "-")
+    if panel_type_lower != "hapmap3":
+        console.print(f"[red]Error: Unknown panel type '{panel_type}'. Supported: hapmap3[/red]")
+        raise typer.Exit(1)
+
+    from .references.hapmap3_download import HapMap3DownloadConfig, HapMap3Downloader
+
+    try:
+        config = HapMap3DownloadConfig(
+            build=build,
+            cache_dir=output if output else HapMap3DownloadConfig().cache_dir,
+        )
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+    downloader = HapMap3Downloader(config)
+
+    if not quiet:
+        if downloader.is_cached() and not force:
+            console.print(f"[yellow]HapMap3 {build} already cached at:[/yellow]")
+            console.print(f"  {config.get_cache_path()}")
+            console.print("[dim]Use --force to re-download[/dim]")
+            return
+
+    async def run_download() -> Path:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=console,
+            disable=quiet,
+        ) as progress:
+            task = progress.add_task(f"Downloading HapMap3 {build}...", total=None)
+
+            def update_progress(downloaded: int, total: int) -> None:
+                progress.update(task, completed=downloaded, total=total)
+
+            result = await downloader.download(
+                force=force,
+                progress_callback=update_progress if not quiet else None,
+            )
+            return result
+
+    try:
+        result_path = asyncio.run(run_download())
+        if not quiet:
+            console.print("[green]✓[/green] Downloaded HapMap3 reference")
+            console.print(f"  Path: {result_path}")
+            console.print(f"  Build: {build}")
+    except Exception as e:
+        console.print(f"[red]Error downloading reference: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
 @app.command("load-reference")
 def load_reference(
     panel_type: Annotated[
@@ -1827,29 +1913,41 @@ def load_reference(
         raise typer.Exit(1)
 
     if tsv_path is None:
-        import importlib.resources
+        from .references.hapmap3_download import HapMap3DownloadConfig
 
-        try:
-            with importlib.resources.files("vcf_pg_loader").joinpath(
-                f"data/references/hapmap3_{build}.tsv.gz"
-            ) as bundled_path:
-                if bundled_path.exists():
-                    tsv_path = Path(bundled_path)
-                else:
-                    data_dir = Path(__file__).parent / "data" / "references"
-                    tsv_path = data_dir / f"hapmap3_{build}.tsv.gz"
-                    if not tsv_path.exists():
-                        tsv_path = data_dir / f"hapmap3_{build}.tsv"
-        except Exception:
-            data_dir = Path(__file__).parent / "data" / "references"
-            tsv_path = data_dir / f"hapmap3_{build}.tsv.gz"
-            if not tsv_path.exists():
-                tsv_path = data_dir / f"hapmap3_{build}.tsv"
+        download_config = HapMap3DownloadConfig(build=build)
+        cached_path = download_config.get_cache_path()
+
+        if cached_path.exists():
+            tsv_path = cached_path
+            if not quiet:
+                console.print(f"[dim]Using cached HapMap3: {cached_path}[/dim]")
+        else:
+            import importlib.resources
+
+            try:
+                with importlib.resources.files("vcf_pg_loader").joinpath(
+                    f"data/references/hapmap3_{build}.tsv.gz"
+                ) as bundled_path:
+                    if bundled_path.exists():
+                        tsv_path = Path(bundled_path)
+                    else:
+                        data_dir = Path(__file__).parent / "data" / "references"
+                        tsv_path = data_dir / f"hapmap3_{build}.tsv.gz"
+                        if not tsv_path.exists():
+                            tsv_path = data_dir / f"hapmap3_{build}.tsv"
+            except Exception:
+                data_dir = Path(__file__).parent / "data" / "references"
+                tsv_path = data_dir / f"hapmap3_{build}.tsv.gz"
+                if not tsv_path.exists():
+                    tsv_path = data_dir / f"hapmap3_{build}.tsv"
 
     if not tsv_path.exists():
         console.print(
             f"[red]Error: Reference file not found: {tsv_path}[/red]\n"
-            f"Please provide a path to the HapMap3 reference file."
+            f"[yellow]Tip: Download the full HapMap3 reference with:[/yellow]\n"
+            f"  vcf-pg-loader download-reference hapmap3 --build {build}\n"
+            f"Or provide a path to your own HapMap3 file."
         )
         raise typer.Exit(1)
 

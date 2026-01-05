@@ -420,33 +420,84 @@ vcf-pg-loader list-pgs [OPTIONS]
 
 ---
 
-### `load-reference`
+### `download-reference`
 
-Load a reference panel (e.g., HapMap3).
+Download reference panel data (HapMap3) from authoritative sources.
 
 ```bash
-vcf-pg-loader load-reference [OPTIONS] FILE
+vcf-pg-loader download-reference [OPTIONS] PANEL_TYPE
 ```
 
 #### Arguments
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `FILE` | Yes | Path to reference panel file (TSV) |
+| `PANEL_TYPE` | Yes | Reference panel type (currently: `hapmap3`) |
+
+#### Options
+
+| Option | Short | Default | Description |
+|--------|-------|---------|-------------|
+| `--build` | `-b` | `grch38` | Genome build (`grch37` or `grch38`) |
+| `--output` | `-o` | `~/.vcf-pg-loader/references` | Output directory |
+| `--force` | `-f` | `false` | Force re-download even if cached |
+| `--quiet` | `-q` | `false` | Suppress non-error output |
+| `--verbose` | `-v` | `false` | Verbose output |
+
+#### Examples
+
+```bash
+# Download HapMap3 for GRCh38 (default)
+vcf-pg-loader download-reference hapmap3
+
+# Download for GRCh37
+vcf-pg-loader download-reference hapmap3 --build grch37
+
+# Force re-download
+vcf-pg-loader download-reference hapmap3 --force
+
+# Custom output directory
+vcf-pg-loader download-reference hapmap3 --output /path/to/refs
+```
+
+---
+
+### `load-reference`
+
+Load a reference panel (e.g., HapMap3) into the database.
+
+```bash
+vcf-pg-loader load-reference [OPTIONS] PANEL_TYPE [FILE]
+```
+
+#### Arguments
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `PANEL_TYPE` | Yes | Reference panel type (`hapmap3`, `ld-blocks`) |
+| `FILE` | No | Path to reference file (uses cached download if omitted) |
 
 #### Options
 
 | Option | Short | Default | Description |
 |--------|-------|---------|-------------|
 | `--db` | `-d` | Required | PostgreSQL connection URL |
-| `--panel-name` | | Required | Panel identifier (e.g., "hapmap3") |
+| `--build` | `-b` | `grch38` | Genome build (`grch37` or `grch38`) |
+| `--population` | `-p` | | Population for LD blocks (EUR, AFR, EAS, SAS) |
+| `--quiet` | `-q` | `false` | Suppress non-error output |
+| `--verbose` | `-v` | `false` | Verbose output |
 
 #### Examples
 
 ```bash
-vcf-pg-loader load-reference hapmap3_snps.tsv \
-    --panel-name hapmap3 \
-    --db postgresql://localhost/prs_db
+# Load HapMap3 using cached download
+vcf-pg-loader load-reference hapmap3 --db postgresql://localhost/prs_db
+
+# Load from custom file
+vcf-pg-loader load-reference hapmap3 /path/to/hapmap3.tsv --db postgresql://localhost/prs_db
+
+# Load LD blocks for European population
+vcf-pg-loader load-reference ld-blocks --population EUR --db postgresql://localhost/prs_db
 ```
 
 ---
