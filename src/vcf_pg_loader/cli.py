@@ -1686,11 +1686,18 @@ def _load_ld_blocks(
         raise typer.Exit(1)
 
     population = population.upper()
-    if population not in ("EUR", "AFR", "EAS", "SAS"):
-        console.print(
-            f"[red]Error: Invalid population '{population}'. Use EUR, AFR, EAS, or SAS[/red]"
-        )
+    valid_pops = ("EUR", "AFR", "ASN", "EAS", "SAS")
+    if population not in valid_pops:
+        console.print(f"[red]Error: Invalid population '{population}'. Use EUR, AFR, or ASN[/red]")
         raise typer.Exit(1)
+
+    pop_for_cache = population.lower()
+    if population in ("EAS", "SAS"):
+        pop_for_cache = "asn"
+        if not quiet:
+            console.print(
+                f"[yellow]Note: {population} mapped to ASN (ldetect-data source)[/yellow]"
+            )
 
     build = build.lower()
     if build not in ("grch37", "grch38"):
@@ -1698,29 +1705,41 @@ def _load_ld_blocks(
         raise typer.Exit(1)
 
     if bed_path is None:
-        import importlib.resources
+        from .references.ld_blocks_download import LDBlockDownloadConfig
 
-        try:
-            with importlib.resources.files("vcf_pg_loader").joinpath(
-                f"data/references/ld_blocks_{population.lower()}_{build}.bed.gz"
-            ) as bundled_path:
-                if bundled_path.exists():
-                    bed_path = Path(bundled_path)
-                else:
-                    data_dir = Path(__file__).parent / "data" / "references"
-                    bed_path = data_dir / f"ld_blocks_{population.lower()}_{build}.bed.gz"
-                    if not bed_path.exists():
-                        bed_path = data_dir / f"ld_blocks_{population.lower()}_{build}.bed"
-        except Exception:
-            data_dir = Path(__file__).parent / "data" / "references"
-            bed_path = data_dir / f"ld_blocks_{population.lower()}_{build}.bed.gz"
-            if not bed_path.exists():
-                bed_path = data_dir / f"ld_blocks_{population.lower()}_{build}.bed"
+        download_config = LDBlockDownloadConfig(population=pop_for_cache, build=build)
+        cached_path = download_config.get_cache_path()
+
+        if cached_path.exists():
+            bed_path = cached_path
+            if not quiet:
+                console.print(f"[dim]Using cached LD blocks: {cached_path}[/dim]")
+        else:
+            import importlib.resources
+
+            try:
+                with importlib.resources.files("vcf_pg_loader").joinpath(
+                    f"data/references/ld_blocks_{pop_for_cache}_{build}.bed.gz"
+                ) as bundled_path:
+                    if bundled_path.exists():
+                        bed_path = Path(bundled_path)
+                    else:
+                        data_dir = Path(__file__).parent / "data" / "references"
+                        bed_path = data_dir / f"ld_blocks_{pop_for_cache}_{build}.bed.gz"
+                        if not bed_path.exists():
+                            bed_path = data_dir / f"ld_blocks_{pop_for_cache}_{build}.bed"
+            except Exception:
+                data_dir = Path(__file__).parent / "data" / "references"
+                bed_path = data_dir / f"ld_blocks_{pop_for_cache}_{build}.bed.gz"
+                if not bed_path.exists():
+                    bed_path = data_dir / f"ld_blocks_{pop_for_cache}_{build}.bed"
 
     if not bed_path.exists():
         console.print(
             f"[red]Error: LD blocks file not found: {bed_path}[/red]\n"
-            f"Please provide a path to the LD blocks BED file."
+            f"[yellow]Tip: Download LD blocks with:[/yellow]\n"
+            f"  vcf-pg-loader download-reference ld-blocks --population {pop_for_cache}\n"
+            f"Or provide a path to your own LD blocks BED file."
         )
         raise typer.Exit(1)
 
@@ -1768,12 +1787,16 @@ def _load_ld_blocks(
 def download_reference(
     panel_type: Annotated[
         str,
-        typer.Argument(help="Reference panel type (hapmap3)"),
+        typer.Argument(help="Reference panel type (hapmap3, ld-blocks)"),
     ],
     build: Annotated[
         str,
         typer.Option("--build", "-b", help="Genome build (grch37 or grch38)"),
     ] = "grch38",
+    population: Annotated[
+        str,
+        typer.Option("--population", "-p", help="Population for LD blocks (eur, afr, asn)"),
+    ] = "eur",
     output: Annotated[
         Path | None,
         typer.Option("--output", "-o", help="Output directory for downloaded files"),
@@ -1784,21 +1807,32 @@ def download_reference(
 ) -> None:
     """Download reference panel data for PRS analysis.
 
-    Downloads HapMap3 (~1.1M SNPs) from authoritative sources (LDpred2 figshare).
+    Downloads HapMap3 (~1.1M SNPs) or LD blocks from authoritative sources.
     Files are cached locally for reuse.
 
     Example:
         vcf-pg-loader download-reference hapmap3 --build grch38
         vcf-pg-loader download-reference hapmap3 --build grch37 --force
-        vcf-pg-loader download-reference hapmap3 --output /custom/path
+        vcf-pg-loader download-reference ld-blocks --population eur
+        vcf-pg-loader download-reference ld-blocks --population afr --output /custom/path
     """
     setup_logging(verbose, quiet)
 
     panel_type_lower = panel_type.lower().replace("_", "-")
-    if panel_type_lower != "hapmap3":
-        console.print(f"[red]Error: Unknown panel type '{panel_type}'. Supported: hapmap3[/red]")
+
+    if panel_type_lower == "hapmap3":
+        _download_hapmap3(build, output, force, quiet)
+    elif panel_type_lower == "ld-blocks":
+        _download_ld_blocks(population, build, output, force, quiet)
+    else:
+        console.print(
+            f"[red]Error: Unknown panel type '{panel_type}'. " "Supported: hapmap3, ld-blocks[/red]"
+        )
         raise typer.Exit(1)
 
+
+def _download_hapmap3(build: str, output: Path | None, force: bool, quiet: bool) -> None:
+    """Download HapMap3 reference panel."""
     from .references.hapmap3_download import HapMap3DownloadConfig, HapMap3Downloader
 
     try:
@@ -1844,6 +1878,70 @@ def download_reference(
         if not quiet:
             console.print("[green]✓[/green] Downloaded HapMap3 reference")
             console.print(f"  Path: {result_path}")
+            console.print(f"  Build: {build}")
+    except Exception as e:
+        console.print(f"[red]Error downloading reference: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+def _download_ld_blocks(
+    population: str, build: str, output: Path | None, force: bool, quiet: bool
+) -> None:
+    """Download LD block definitions."""
+    import warnings
+
+    from .references.ld_blocks_download import LDBlockDownloadConfig, LDBlockDownloader
+
+    try:
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            config = LDBlockDownloadConfig(
+                population=population,
+                build=build,
+                cache_dir=output if output else LDBlockDownloadConfig().cache_dir,
+            )
+            for warning in w:
+                if not quiet:
+                    console.print(f"[yellow]Warning: {warning.message}[/yellow]")
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+    downloader = LDBlockDownloader(config)
+
+    if not quiet:
+        if downloader.is_cached() and not force:
+            console.print(f"[yellow]LD blocks {population.upper()} already cached at:[/yellow]")
+            console.print(f"  {config.get_cache_path()}")
+            console.print("[dim]Use --force to re-download[/dim]")
+            return
+
+    async def run_download() -> Path:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=console,
+            disable=quiet,
+        ) as progress:
+            task = progress.add_task(f"Downloading LD blocks ({population.upper()})...", total=None)
+
+            def update_progress(downloaded: int, total: int) -> None:
+                progress.update(task, completed=downloaded, total=total)
+
+            result = await downloader.download(
+                force=force,
+                progress_callback=update_progress if not quiet else None,
+            )
+            return result
+
+    try:
+        result_path = asyncio.run(run_download())
+        if not quiet:
+            console.print("[green]✓[/green] Downloaded LD blocks")
+            console.print(f"  Path: {result_path}")
+            console.print(f"  Population: {population.upper()}")
             console.print(f"  Build: {build}")
     except Exception as e:
         console.print(f"[red]Error downloading reference: {e}[/red]")

@@ -61,11 +61,14 @@ The loader automatically extracts:
 
 ### Step 3: Load Reference Panel
 
-Load HapMap3 SNPs used by PRS-CS and LDpred2:
+Download and load HapMap3 SNPs used by PRS-CS and LDpred2:
 
 ```bash
-vcf-pg-loader load-reference hapmap3_snps.tsv \
-    --panel-name hapmap3 \
+# Download HapMap3 reference (~1.1M variants)
+vcf-pg-loader download-reference hapmap3 --build grch38
+
+# Load into database
+vcf-pg-loader load-reference hapmap3 --build grch38 \
     --db postgresql://localhost/prs_db
 ```
 
@@ -85,15 +88,25 @@ vcf-pg-loader import-gwas t2d_gwas_sumstats.tsv \
     --db postgresql://localhost/prs_db
 ```
 
-### Step 5: Annotate LD Blocks
+### Step 5: Load and Annotate LD Blocks
 
-Add LD block annotations for Bayesian PRS methods:
+Download and load LD block definitions for Bayesian PRS methods:
 
 ```bash
+# Download LD blocks from Berisa & Pickrell (2016)
+vcf-pg-loader download-reference ld-blocks --population eur
+
+# Load into database
+vcf-pg-loader load-reference ld-blocks --population EUR --build grch37 \
+    --db postgresql://localhost/prs_db
+
+# Annotate variants with LD block assignments
 vcf-pg-loader annotate-ld-blocks \
     --population EUR \
     --db postgresql://localhost/prs_db
 ```
+
+Note: LD blocks are only available for GRCh37. Available populations: EUR, AFR, ASN.
 
 ### Step 6: Compute Sample QC
 

@@ -422,7 +422,7 @@ vcf-pg-loader list-pgs [OPTIONS]
 
 ### `download-reference`
 
-Download reference panel data (HapMap3) from authoritative sources.
+Download reference panel data (HapMap3 or LD blocks) from authoritative sources.
 
 ```bash
 vcf-pg-loader download-reference [OPTIONS] PANEL_TYPE
@@ -432,13 +432,14 @@ vcf-pg-loader download-reference [OPTIONS] PANEL_TYPE
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `PANEL_TYPE` | Yes | Reference panel type (currently: `hapmap3`) |
+| `PANEL_TYPE` | Yes | Reference panel type: `hapmap3` or `ld-blocks` |
 
 #### Options
 
 | Option | Short | Default | Description |
 |--------|-------|---------|-------------|
 | `--build` | `-b` | `grch38` | Genome build (`grch37` or `grch38`) |
+| `--population` | `-p` | `eur` | Population for LD blocks (`eur`, `afr`, `asn`) |
 | `--output` | `-o` | `~/.vcf-pg-loader/references` | Output directory |
 | `--force` | `-f` | `false` | Force re-download even if cached |
 | `--quiet` | `-q` | `false` | Suppress non-error output |
@@ -450,8 +451,17 @@ vcf-pg-loader download-reference [OPTIONS] PANEL_TYPE
 # Download HapMap3 for GRCh38 (default)
 vcf-pg-loader download-reference hapmap3
 
-# Download for GRCh37
+# Download HapMap3 for GRCh37
 vcf-pg-loader download-reference hapmap3 --build grch37
+
+# Download LD blocks for European population
+vcf-pg-loader download-reference ld-blocks --population eur
+
+# Download LD blocks for African population
+vcf-pg-loader download-reference ld-blocks --population afr
+
+# Download LD blocks for Asian population
+vcf-pg-loader download-reference ld-blocks --population asn
 
 # Force re-download
 vcf-pg-loader download-reference hapmap3 --force
@@ -459,6 +469,15 @@ vcf-pg-loader download-reference hapmap3 --force
 # Custom output directory
 vcf-pg-loader download-reference hapmap3 --output /path/to/refs
 ```
+
+#### Data Sources
+
+- **HapMap3**: LDpred2 HapMap3+ variant list from figshare (~1.1M SNPs)
+- **LD Blocks**: Berisa & Pickrell (2016) from ldetect-data on Bitbucket
+  - EUR: ~1,703 blocks
+  - AFR: ~2,583 blocks
+  - ASN: ~1,445 blocks
+  - Note: Only GRCh37 coordinates available natively
 
 ---
 

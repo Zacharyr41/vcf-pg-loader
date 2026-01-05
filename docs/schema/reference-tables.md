@@ -171,8 +171,42 @@ The LD blocks partition the genome into approximately independent regions:
 | Population | Blocks | Mean Size |
 |------------|--------|-----------|
 | EUR | 1703 | ~1.7 Mb |
-| AFR | 2110 | ~1.4 Mb |
-| EAS | 1445 | ~2.0 Mb |
+| AFR | 2583 | ~1.2 Mb |
+| ASN | 1445 | ~2.0 Mb |
+
+#### Downloading LD Block Data
+
+The easiest way to get LD block data is using the CLI:
+
+```bash
+# Download LD blocks for European population (default)
+vcf-pg-loader download-reference ld-blocks --population eur
+
+# Download for African population
+vcf-pg-loader download-reference ld-blocks --population afr
+
+# Download for Asian population
+vcf-pg-loader download-reference ld-blocks --population asn
+
+# Force re-download
+vcf-pg-loader download-reference ld-blocks --population eur --force
+```
+
+Files are cached at `~/.vcf-pg-loader/references/` by default. The data is sourced from the ldetect-data repository on Bitbucket.
+
+**Note:** LD blocks are only available for GRCh37/hg19. GRCh38 coordinates would require liftover.
+
+#### Loading LD Blocks into the Database
+
+After downloading, load into the database:
+
+```bash
+# Uses cached download automatically
+vcf-pg-loader load-reference ld-blocks --population EUR --build grch37 --db postgresql://localhost/prs_db
+
+# Or provide your own file
+vcf-pg-loader load-reference ld-blocks /path/to/blocks.bed --population EUR --db postgresql://localhost/prs_db
+```
 
 ### Usage Examples
 
