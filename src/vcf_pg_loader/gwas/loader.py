@@ -8,6 +8,8 @@ from typing import TypedDict
 
 import asyncpg
 
+from ..utils.variant_matching import build_variant_lookups
+from ..utils.variant_matching import match_variant as shared_match_variant
 from .models import GWASSummaryStatRecord, HarmonizationResult
 from .schema import GWASSchemaManager
 
@@ -185,32 +187,17 @@ def match_variant(
 ) -> int | None:
     """Match a GWAS variant to the variants table.
 
-    Args:
-        chromosome: Chromosome (with or without 'chr' prefix)
-        position: Genomic position
-        effect_allele: Effect allele
-        other_allele: Other/reference allele
-        rsid: dbSNP rsID (optional)
-        variant_lookup: Dict mapping (chrom, pos, ref, alt) to variant_id
-        rsid_lookup: Dict mapping rsid to variant_id
-
-    Returns:
-        variant_id if matched, None otherwise
+    Delegates to shared utility for consistent chromosome normalization.
     """
-    chrom = chromosome if chromosome.startswith("chr") else f"chr{chromosome}"
-
-    key1 = (chrom, position, other_allele.upper(), effect_allele.upper())
-    if key1 in variant_lookup:
-        return variant_lookup[key1]
-
-    key2 = (chrom, position, effect_allele.upper(), other_allele.upper())
-    if key2 in variant_lookup:
-        return variant_lookup[key2]
-
-    if rsid and rsid in rsid_lookup:
-        return rsid_lookup[rsid]
-
-    return None
+    return shared_match_variant(
+        chromosome=chromosome,
+        position=position,
+        effect_allele=effect_allele,
+        other_allele=other_allele,
+        rsid=rsid,
+        variant_lookup=variant_lookup,
+        rsid_lookup=rsid_lookup,
+    )
 
 
 class GWASSSFParser:
@@ -463,22 +450,11 @@ class GWASLoader:
     async def _build_variant_lookups(
         self, conn: asyncpg.Connection
     ) -> tuple[dict[tuple[str, int, str, str], int], dict[str, int]]:
-        """Build lookup dictionaries for variant matching."""
-        variant_lookup: dict[tuple[str, int, str, str], int] = {}
-        rsid_lookup: dict[str, int] = {}
+        """Build lookup dictionaries for variant matching.
 
-        rows = await conn.fetch("""
-            SELECT variant_id, chrom, pos, ref, alt, rs_id
-            FROM variants
-        """)
-
-        for row in rows:
-            key = (row["chrom"], row["pos"], row["ref"].upper(), row["alt"].upper())
-            variant_lookup[key] = row["variant_id"]
-            if row["rs_id"]:
-                rsid_lookup[row["rs_id"]] = row["variant_id"]
-
-        return variant_lookup, rsid_lookup
+        Delegates to shared utility for consistent chromosome normalization.
+        """
+        return await build_variant_lookups(conn)
 
     async def _get_variant_info(self, conn: asyncpg.Connection, variant_id: int) -> dict | None:
         """Get variant REF/ALT for harmonization."""

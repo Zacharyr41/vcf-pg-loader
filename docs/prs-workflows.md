@@ -124,6 +124,8 @@ Update pre-computed views for fast queries:
 vcf-pg-loader refresh-views --db postgresql://localhost/prs_db
 ```
 
+> **Note**: The `prs_candidate_variants` materialized view requires GWAS data (it joins with `gwas_summary_stats`). Ensure you have imported GWAS summary statistics in Step 4 before refreshing views. If no GWAS data is available, the view will be empty but the command will succeed.
+
 ### Step 8: Export for PRS Tools
 
 Export data in the format required by your PRS method:

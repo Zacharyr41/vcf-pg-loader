@@ -125,10 +125,7 @@ async def export_plink_score(
         ORDER BY v.chrom, v.pos
     """
 
-    try:
-        rows = await conn.fetch(query, study_id, *filter_params)
-    except Exception:
-        rows = []
+    rows = await conn.fetch(query, study_id, *filter_params)
 
     count = 0
     with open(output_path, "w", encoding="utf-8", newline="\n") as f:

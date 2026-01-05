@@ -259,8 +259,8 @@ class TestVariantMatching:
         from vcf_pg_loader.gwas.loader import match_variant
 
         variant_lookup = {
-            ("chr1", 100, "A", "G"): 1,
-            ("chr1", 200, "C", "T"): 2,
+            ("1", 100, "A", "G"): 1,
+            ("1", 200, "C", "T"): 2,
         }
         rsid_lookup = {}
 
@@ -297,7 +297,7 @@ class TestVariantMatching:
         """Should return None when no match is found."""
         from vcf_pg_loader.gwas.loader import match_variant
 
-        variant_lookup = {("chr1", 100, "A", "G"): 1}
+        variant_lookup = {("1", 100, "A", "G"): 1}
         rsid_lookup = {}
 
         result = match_variant(
@@ -315,11 +315,11 @@ class TestVariantMatching:
         """Should handle both 'chr1' and '1' chromosome formats."""
         from vcf_pg_loader.gwas.loader import match_variant
 
-        variant_lookup = {("chr1", 100, "A", "G"): 1}
+        variant_lookup = {("1", 100, "A", "G"): 1}
         rsid_lookup = {}
 
         result = match_variant(
-            chromosome="1",
+            chromosome="chr1",
             position=100,
             effect_allele="G",
             other_allele="A",

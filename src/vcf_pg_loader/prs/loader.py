@@ -6,6 +6,8 @@ from typing import TypedDict
 
 import asyncpg
 
+from ..utils.variant_matching import build_variant_lookups
+from ..utils.variant_matching import match_variant as shared_match_variant
 from .pgs_catalog import (
     PGSCatalogParser,
     validate_genome_build,
@@ -157,29 +159,11 @@ class PGSLoader:
     async def _build_variant_lookups(
         self, conn: asyncpg.Connection
     ) -> tuple[dict[tuple[str, int, str, str], int], dict[str, int]]:
-        """Build lookup dictionaries for variant matching."""
-        variant_lookup: dict[tuple[str, int, str, str], int] = {}
-        rsid_lookup: dict[str, int] = {}
+        """Build lookup dictionaries for variant matching.
 
-        rows = await conn.fetch("""
-            SELECT variant_id, chrom, pos, ref, alt, rs_id
-            FROM variants
-        """)
-
-        for row in rows:
-            chrom = str(row["chrom"])
-            chrom_normalized = chrom.replace("chr", "")
-
-            key = (chrom_normalized, row["pos"], row["ref"].upper(), row["alt"].upper())
-            variant_lookup[key] = row["variant_id"]
-
-            key_with_chr = (chrom, row["pos"], row["ref"].upper(), row["alt"].upper())
-            variant_lookup[key_with_chr] = row["variant_id"]
-
-            if row["rs_id"]:
-                rsid_lookup[row["rs_id"]] = row["variant_id"]
-
-        return variant_lookup, rsid_lookup
+        Delegates to shared utility for consistent chromosome normalization.
+        """
+        return await build_variant_lookups(conn)
 
     def _match_variant(
         self,
@@ -191,23 +175,24 @@ class PGSLoader:
         variant_lookup: dict[tuple[str, int, str, str], int],
         rsid_lookup: dict[str, int],
     ) -> int | None:
-        """Match a PRS weight to the variants table."""
-        if chromosome and position:
-            chrom = chromosome.replace("chr", "")
+        """Match a PRS weight to the variants table.
 
-            if other_allele:
-                key1 = (chrom, position, other_allele.upper(), effect_allele.upper())
-                if key1 in variant_lookup:
-                    return variant_lookup[key1]
+        Delegates to shared utility for consistent chromosome normalization.
+        """
+        if not chromosome or not position:
+            if rsid and rsid in rsid_lookup:
+                return rsid_lookup[rsid]
+            return None
 
-                key2 = (chrom, position, effect_allele.upper(), other_allele.upper())
-                if key2 in variant_lookup:
-                    return variant_lookup[key2]
-
-        if rsid and rsid in rsid_lookup:
-            return rsid_lookup[rsid]
-
-        return None
+        return shared_match_variant(
+            chromosome=chromosome,
+            position=position,
+            effect_allele=effect_allele,
+            other_allele=other_allele,
+            rsid=rsid,
+            variant_lookup=variant_lookup,
+            rsid_lookup=rsid_lookup,
+        )
 
     async def _insert_batch(self, conn: asyncpg.Connection, batch: list[tuple]) -> None:
         """Insert a batch of PRS weights."""

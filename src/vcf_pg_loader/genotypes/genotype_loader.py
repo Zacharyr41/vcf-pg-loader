@@ -240,84 +240,85 @@ class GenotypeLoader:
             Statistics about loaded genotypes
         """
         vcf = VCF(str(vcf_path))
-        samples = vcf.samples
+        try:
+            samples = vcf.samples
 
-        if sample_id_map is None:
-            sample_id_map = await self._get_sample_id_map(conn, samples)
+            if sample_id_map is None:
+                sample_id_map = await self._get_sample_id_map(conn, samples)
 
-        records: list[GenotypeRecord] = []
-        variant_id = variant_id_start
-        total_loaded = 0
-        total_skipped = 0
+            records: list[GenotypeRecord] = []
+            variant_id = variant_id_start
+            total_loaded = 0
+            total_skipped = 0
 
-        for variant in vcf:
-            gt_array = variant.genotypes
-            gq_array = self._safe_format(variant, "GQ")
-            dp_array = self._safe_format(variant, "DP")
-            ad_array = self._safe_format_2d(variant, "AD")
-            ds_array = self._safe_format(variant, "DS")
-            gp_array = self._safe_format_2d(variant, "GP")
+            for variant in vcf:
+                gt_array = variant.genotypes
+                gq_array = self._safe_format(variant, "GQ")
+                dp_array = self._safe_format(variant, "DP")
+                ad_array = self._safe_format_2d(variant, "AD")
+                ds_array = self._safe_format(variant, "DS")
+                gp_array = self._safe_format_2d(variant, "GP")
 
-            for sample_idx, sample_name in enumerate(samples):
-                sample_id = sample_id_map.get(sample_name)
-                if sample_id is None:
-                    continue
-
-                gt_data = gt_array[sample_idx] if gt_array else None
-                if gt_data is None:
-                    continue
-
-                gt = self._format_gt(gt_data)
-                gq = self._safe_get(gq_array, sample_idx)
-                dp = self._safe_get(dp_array, sample_idx)
-                ad = self._safe_get_list(ad_array, sample_idx)
-                ds = self._safe_get(ds_array, sample_idx)
-                gp = self._safe_get_list(gp_array, sample_idx)
-
-                allele_balance = compute_allele_balance(ad)
-
-                if self.adj_filter:
-                    if not evaluate_adj_filter(gt, gq, dp, allele_balance):
-                        total_skipped += 1
+                for sample_idx, sample_name in enumerate(samples):
+                    sample_id = sample_id_map.get(sample_name)
+                    if sample_id is None:
                         continue
 
-                dosage = ds
-                if dosage is None and gp is not None:
-                    dosage = dosage_from_gp(gp)
+                    gt_data = gt_array[sample_idx] if gt_array else None
+                    if gt_data is None:
+                        continue
 
-                if self.dosage_only:
-                    gt = "."
-                    gq = None
-                    dp = None
-                    ad = None
-                    allele_balance = None
+                    gt = self._format_gt(gt_data)
+                    gq = self._safe_get(gq_array, sample_idx)
+                    dp = self._safe_get(dp_array, sample_idx)
+                    ad = self._safe_get_list(ad_array, sample_idx)
+                    ds = self._safe_get(ds_array, sample_idx)
+                    gp = self._safe_get_list(gp_array, sample_idx)
 
-                record = GenotypeRecord(
-                    variant_id=variant_id,
-                    sample_id=sample_id,
-                    gt=gt,
-                    phased="|" in (gt if gt != "." else ""),
-                    gq=gq,
-                    dp=dp,
-                    ad=ad,
-                    dosage=dosage,
-                    gp=gp,
-                    allele_balance=allele_balance,
-                )
-                records.append(record)
+                    allele_balance = compute_allele_balance(ad)
 
-                if len(records) >= self.batch_size:
-                    await self._insert_batch(conn, records)
-                    total_loaded += len(records)
-                    records = []
+                    if self.adj_filter:
+                        if not evaluate_adj_filter(gt, gq, dp, allele_balance):
+                            total_skipped += 1
+                            continue
 
-            variant_id += 1
+                    dosage = ds
+                    if dosage is None and gp is not None:
+                        dosage = dosage_from_gp(gp)
 
-        if records:
-            await self._insert_batch(conn, records)
-            total_loaded += len(records)
+                    if self.dosage_only:
+                        gt = "."
+                        gq = None
+                        dp = None
+                        ad = None
+                        allele_balance = None
 
-        vcf.close()
+                    record = GenotypeRecord(
+                        variant_id=variant_id,
+                        sample_id=sample_id,
+                        gt=gt,
+                        phased="|" in (gt if gt != "." else ""),
+                        gq=gq,
+                        dp=dp,
+                        ad=ad,
+                        dosage=dosage,
+                        gp=gp,
+                        allele_balance=allele_balance,
+                    )
+                    records.append(record)
+
+                    if len(records) >= self.batch_size:
+                        await self._insert_batch(conn, records)
+                        total_loaded += len(records)
+                        records = []
+
+                variant_id += 1
+
+            if records:
+                await self._insert_batch(conn, records)
+                total_loaded += len(records)
+        finally:
+            vcf.close()
 
         return {
             "genotypes_loaded": total_loaded,

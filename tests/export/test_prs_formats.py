@@ -735,3 +735,22 @@ class TestNeffComputation:
         n_eff = float(data_line.split("\t")[6])
 
         assert abs(n_eff - 50000) < 1
+
+
+class TestErrorHandling:
+    """Test error handling in export functions."""
+
+    async def test_export_plink_score_propagates_database_errors(self, pg_pool):
+        """Verify that database errors are propagated, not silently swallowed."""
+        import asyncpg
+
+        from vcf_pg_loader.export.prs_formats import export_plink_score
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+            output_path = Path(f.name)
+
+        async with pg_pool.acquire() as conn:
+            await conn.execute("DROP TABLE IF EXISTS variants CASCADE")
+
+            with pytest.raises(asyncpg.UndefinedTableError):
+                await export_plink_score(conn, 999, output_path)
