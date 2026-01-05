@@ -1,0 +1,8 @@
+###PGS CATALOG SCORING FILE
+#pgs_id=PGS000003
+#trait_name=Height
+#genome_build=GRCh37
+#weight_type=beta
+rsID	chr_name	chr_position	effect_allele	effect_weight
+rs3094315	1	752566	G	0.0234
+rs3131972	1	752721	A	-0.0156

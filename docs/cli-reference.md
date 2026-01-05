@@ -317,6 +317,405 @@ vcf-pg-loader db reset
 
 ---
 
+## PRS Research Commands
+
+### `import-gwas`
+
+Import GWAS summary statistics following the GWAS-SSF standard.
+
+```bash
+vcf-pg-loader import-gwas [OPTIONS] FILE
+```
+
+#### Arguments
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `FILE` | Yes | Path to summary statistics file (TSV) |
+
+#### Options
+
+| Option | Short | Default | Description |
+|--------|-------|---------|-------------|
+| `--db` | `-d` | Required | PostgreSQL connection URL |
+| `--study-id` | | | GWAS Catalog accession (e.g., GCST90012345) |
+| `--trait` | | | Trait name |
+| `--sample-size` | | | Total sample size |
+| `--n-cases` | | | Number of cases (case-control) |
+| `--n-controls` | | | Number of controls |
+| `--genome-build` | | GRCh38 | Reference genome build |
+
+#### Examples
+
+```bash
+vcf-pg-loader import-gwas sumstats.tsv \
+    --study-id GCST90012345 \
+    --trait "Type 2 Diabetes" \
+    --sample-size 898130 \
+    --n-cases 74124 \
+    --n-controls 824006 \
+    --db postgresql://localhost/prs_db
+```
+
+---
+
+### `list-studies`
+
+List loaded GWAS studies.
+
+```bash
+vcf-pg-loader list-studies [OPTIONS]
+```
+
+#### Options
+
+| Option | Short | Default | Description |
+|--------|-------|---------|-------------|
+| `--db` | `-d` | Required | PostgreSQL connection URL |
+
+---
+
+### `import-pgs`
+
+Import PGS Catalog scoring file.
+
+```bash
+vcf-pg-loader import-pgs [OPTIONS] FILE
+```
+
+#### Arguments
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `FILE` | Yes | Path to PGS Catalog scoring file |
+
+#### Options
+
+| Option | Short | Default | Description |
+|--------|-------|---------|-------------|
+| `--db` | `-d` | Required | PostgreSQL connection URL |
+
+#### Examples
+
+```bash
+vcf-pg-loader import-pgs PGS000001_hmPOS_GRCh38.txt \
+    --db postgresql://localhost/prs_db
+```
+
+---
+
+### `list-pgs`
+
+List loaded PGS scores with match statistics.
+
+```bash
+vcf-pg-loader list-pgs [OPTIONS]
+```
+
+#### Options
+
+| Option | Short | Default | Description |
+|--------|-------|---------|-------------|
+| `--db` | `-d` | Required | PostgreSQL connection URL |
+
+---
+
+### `download-reference`
+
+Download reference panel data (HapMap3 or LD blocks) from authoritative sources.
+
+```bash
+vcf-pg-loader download-reference [OPTIONS] PANEL_TYPE
+```
+
+#### Arguments
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `PANEL_TYPE` | Yes | Reference panel type: `hapmap3` or `ld-blocks` |
+
+#### Options
+
+| Option | Short | Default | Description |
+|--------|-------|---------|-------------|
+| `--build` | `-b` | `grch38` | Genome build (`grch37` or `grch38`) |
+| `--population` | `-p` | `eur` | Population for LD blocks (`eur`, `afr`, `asn`) |
+| `--output` | `-o` | `~/.vcf-pg-loader/references` | Output directory |
+| `--force` | `-f` | `false` | Force re-download even if cached |
+| `--quiet` | `-q` | `false` | Suppress non-error output |
+| `--verbose` | `-v` | `false` | Verbose output |
+
+#### Examples
+
+```bash
+# Download HapMap3 for GRCh38 (default)
+vcf-pg-loader download-reference hapmap3
+
+# Download HapMap3 for GRCh37
+vcf-pg-loader download-reference hapmap3 --build grch37
+
+# Download LD blocks for European population
+vcf-pg-loader download-reference ld-blocks --population eur
+
+# Download LD blocks for African population
+vcf-pg-loader download-reference ld-blocks --population afr
+
+# Download LD blocks for Asian population
+vcf-pg-loader download-reference ld-blocks --population asn
+
+# Force re-download
+vcf-pg-loader download-reference hapmap3 --force
+
+# Custom output directory
+vcf-pg-loader download-reference hapmap3 --output /path/to/refs
+```
+
+#### Data Sources
+
+- **HapMap3**: LDpred2 HapMap3+ variant list from figshare (~1.1M SNPs)
+- **LD Blocks**: Berisa & Pickrell (2016) from ldetect-data on Bitbucket
+  - EUR: ~1,703 blocks
+  - AFR: ~2,583 blocks
+  - ASN: ~1,445 blocks
+  - Note: Only GRCh37 coordinates available natively
+
+---
+
+### `load-reference`
+
+Load a reference panel (e.g., HapMap3) into the database.
+
+```bash
+vcf-pg-loader load-reference [OPTIONS] PANEL_TYPE [FILE]
+```
+
+#### Arguments
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `PANEL_TYPE` | Yes | Reference panel type (`hapmap3`, `ld-blocks`) |
+| `FILE` | No | Path to reference file (uses cached download if omitted) |
+
+#### Options
+
+| Option | Short | Default | Description |
+|--------|-------|---------|-------------|
+| `--db` | `-d` | Required | PostgreSQL connection URL |
+| `--build` | `-b` | `grch38` | Genome build (`grch37` or `grch38`) |
+| `--population` | `-p` | | Population for LD blocks (EUR, AFR, EAS, SAS) |
+| `--quiet` | `-q` | `false` | Suppress non-error output |
+| `--verbose` | `-v` | `false` | Verbose output |
+
+#### Examples
+
+```bash
+# Load HapMap3 using cached download
+vcf-pg-loader load-reference hapmap3 --db postgresql://localhost/prs_db
+
+# Load from custom file
+vcf-pg-loader load-reference hapmap3 /path/to/hapmap3.tsv --db postgresql://localhost/prs_db
+
+# Load LD blocks for European population
+vcf-pg-loader load-reference ld-blocks --population EUR --db postgresql://localhost/prs_db
+```
+
+---
+
+### `annotate-ld-blocks`
+
+Annotate variants with LD block IDs.
+
+```bash
+vcf-pg-loader annotate-ld-blocks [OPTIONS]
+```
+
+#### Options
+
+| Option | Short | Default | Description |
+|--------|-------|---------|-------------|
+| `--db` | `-d` | Required | PostgreSQL connection URL |
+| `--population` | | EUR | Population for LD blocks |
+
+#### Examples
+
+```bash
+vcf-pg-loader annotate-ld-blocks \
+    --population EUR \
+    --db postgresql://localhost/prs_db
+```
+
+---
+
+### `import-frequencies`
+
+Import population allele frequencies.
+
+```bash
+vcf-pg-loader import-frequencies [OPTIONS] FILE
+```
+
+#### Arguments
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `FILE` | Yes | Path to frequency file (VCF or TSV) |
+
+#### Options
+
+| Option | Short | Default | Description |
+|--------|-------|---------|-------------|
+| `--db` | `-d` | Required | PostgreSQL connection URL |
+| `--source` | | Required | Source name (e.g., "gnomAD_v3") |
+
+---
+
+### `compute-sample-qc`
+
+Compute sample-level QC metrics.
+
+```bash
+vcf-pg-loader compute-sample-qc [OPTIONS]
+```
+
+#### Options
+
+| Option | Short | Default | Description |
+|--------|-------|---------|-------------|
+| `--db` | `-d` | Required | PostgreSQL connection URL |
+| `--batch-id` | | | Specific batch to process |
+
+---
+
+### `refresh-views`
+
+Refresh materialized views.
+
+```bash
+vcf-pg-loader refresh-views [OPTIONS]
+```
+
+#### Options
+
+| Option | Short | Default | Description |
+|--------|-------|---------|-------------|
+| `--db` | `-d` | Required | PostgreSQL connection URL |
+| `--concurrent` | | Yes | Use CONCURRENTLY (non-blocking) |
+
+---
+
+## Export Commands
+
+### `export-plink-score`
+
+Export GWAS statistics in PLINK 2.0 --score format.
+
+```bash
+vcf-pg-loader export-plink-score [OPTIONS]
+```
+
+#### Options
+
+| Option | Short | Default | Description |
+|--------|-------|---------|-------------|
+| `--db` | `-d` | Required | PostgreSQL connection URL |
+| `--study-id` | | Required | Study ID to export |
+| `--output` | `-o` | Required | Output file path |
+| `--hapmap3-only` | | No | Filter to HapMap3 variants |
+| `--min-info` | | | Minimum INFO score |
+| `--min-maf` | | | Minimum MAF |
+
+#### Output Format
+
+```
+SNP     A1      BETA
+rs123   A       0.05
+```
+
+---
+
+### `export-prs-cs`
+
+Export GWAS statistics in PRS-CS format.
+
+```bash
+vcf-pg-loader export-prs-cs [OPTIONS]
+```
+
+#### Options
+
+| Option | Short | Default | Description |
+|--------|-------|---------|-------------|
+| `--db` | `-d` | Required | PostgreSQL connection URL |
+| `--study-id` | | Required | Study ID to export |
+| `--output` | `-o` | Required | Output file path |
+| `--use-se` | | Yes | Include standard error (vs p-value) |
+| `--hapmap3-only` | | No | Filter to HapMap3 variants |
+| `--min-info` | | | Minimum INFO score |
+| `--min-maf` | | | Minimum MAF |
+
+#### Output Format
+
+```
+SNP     A1      A2      BETA    SE
+rs123   A       G       0.05    0.01
+```
+
+---
+
+### `export-ldpred2`
+
+Export GWAS statistics in LDpred2 (bigsnpr) format.
+
+```bash
+vcf-pg-loader export-ldpred2 [OPTIONS]
+```
+
+#### Options
+
+| Option | Short | Default | Description |
+|--------|-------|---------|-------------|
+| `--db` | `-d` | Required | PostgreSQL connection URL |
+| `--study-id` | | Required | Study ID to export |
+| `--output` | `-o` | Required | Output file path |
+| `--hapmap3-only` | | No | Filter to HapMap3 variants |
+| `--min-info` | | | Minimum INFO score |
+
+#### Output Format
+
+```
+chr     pos     a0      a1      beta    beta_se n_eff
+1       12345   G       A       0.05    0.01    50000
+```
+
+---
+
+### `export-prsice2`
+
+Export GWAS statistics in PRSice-2 format.
+
+```bash
+vcf-pg-loader export-prsice2 [OPTIONS]
+```
+
+#### Options
+
+| Option | Short | Default | Description |
+|--------|-------|---------|-------------|
+| `--db` | `-d` | Required | PostgreSQL connection URL |
+| `--study-id` | | Required | Study ID to export |
+| `--output` | `-o` | Required | Output file path |
+| `--hapmap3-only` | | No | Filter to HapMap3 variants |
+| `--min-info` | | | Minimum INFO score |
+
+#### Output Format
+
+```
+SNP     A1      A2      BETA    SE      P
+rs123   A       G       0.05    0.01    1e-8
+```
+
+---
+
 ## Configuration File
 
 vcf-pg-loader supports TOML configuration files for persistent settings.

@@ -50,6 +50,27 @@ class VariantRecord:
     # Sample identification (for multi-sample VCFs)
     sample_id: str | None = None
 
+    # PRS QC metrics (computed at load time)
+    call_rate: float | None = None
+    n_het: int | None = None
+    n_hom_ref: int | None = None
+    n_hom_alt: int | None = None
+    aaf: float | None = None
+    maf: float | None = None
+    mac: int | None = None
+    hwe_p: float | None = None
+
+    # Imputation quality metrics
+    info_score: float | None = None
+    imputation_r2: float | None = None
+    is_imputed: bool = False
+    is_typed: bool = False
+    imputation_source: str | None = None
+
+    # HapMap3 reference panel flagging
+    in_hapmap3: bool = False
+    hapmap3_rsid: str | None = None
+
     @property
     def variant_type(self) -> str:
         """Classify variant type based on REF and ALT alleles."""

@@ -13,7 +13,9 @@ from uuid import UUID, uuid4
 import asyncpg
 
 from .audit import AuditEvent, AuditEventType, AuditLogger
+from .genotypes.genotype_loader import GenotypeLoader
 from .models import VariantRecord
+from .parsers.imputation import ImputationConfig
 from .phi.header_sanitizer import PHIScanner, SanitizationConfig
 from .schema import SchemaManager
 from .tls import TLSConfig, TLSError, get_ssl_param_for_asyncpg, verify_tls_connection
@@ -109,6 +111,13 @@ class LoadConfig:
     phi_scan: bool = False
     fail_on_phi: bool = False
     sanitization_config: SanitizationConfig | None = None
+    min_info_score: float | None = None
+    imputation_source: str = "auto"
+    flag_hapmap3: bool = False
+    hapmap3_build: str = "grch38"
+    store_genotypes: bool = False
+    adj_filter: bool = False
+    dosage_only: bool = False
 
 
 class VCFLoader:
@@ -130,6 +139,7 @@ class VCFLoader:
         self._audit_logger = audit_logger
         self._anonymizer = None
         self._sample_mappings: dict[str, UUID] = {}
+        self._hapmap3_lookup: dict[tuple[str, int], list[dict]] | None = None
 
     async def connect(self) -> None:
         """Establish database connection pool with TLS."""
@@ -278,6 +288,13 @@ class VCFLoader:
                         "Use --no-fail-on-phi to load anyway."
                     )
 
+        imputation_config = None
+        if self.config.min_info_score is not None or self.config.imputation_source != "auto":
+            imputation_config = ImputationConfig(
+                source=self.config.imputation_source,
+                min_info_score=self.config.min_info_score,
+            )
+
         streaming_parser = VCFStreamingParser(
             vcf_path,
             batch_size=self.config.batch_size,
@@ -285,6 +302,7 @@ class VCFLoader:
             human_genome=self.config.human_genome,
             sanitize_headers=self.config.sanitize_headers,
             sanitization_config=self.config.sanitization_config,
+            imputation_config=imputation_config,
         )
 
         if self.config.sanitize_headers:
@@ -329,10 +347,18 @@ class VCFLoader:
                 "enabled" if encryptor.is_available else "disabled",
             )
 
+        if self.config.flag_hapmap3:
+            await self._load_hapmap3_lookup()
+
         try:
             if self.config.drop_indexes:
                 async with self.pool.acquire() as conn:
                     await self._schema_manager.drop_indexes(conn)
+
+            if self.config.store_genotypes:
+                async with self.pool.acquire() as conn:
+                    await self._schema_manager.create_genotypes_schema(conn)
+                self.logger.info("Created genotypes schema for sample-level storage")
 
             await self._start_audit(
                 vcf_path,
@@ -368,10 +394,44 @@ class VCFLoader:
                 async with self.pool.acquire() as conn:
                     await self._schema_manager.create_indexes(conn)
 
+            genotypes_loaded = 0
+            if self.config.store_genotypes and streaming_parser.samples:
+                self.logger.info("Loading genotypes for %d samples", len(streaming_parser.samples))
+                genotype_loader = GenotypeLoader(
+                    adj_filter=self.config.adj_filter,
+                    dosage_only=self.config.dosage_only,
+                    batch_size=self.config.batch_size,
+                )
+                async with self.pool.acquire() as conn:
+                    genotype_result = await genotype_loader.load_from_vcf(
+                        conn,
+                        vcf_path,
+                        variant_id_start=1,
+                    )
+                genotypes_loaded = genotype_result.get("genotypes_loaded", 0)
+                genotypes_skipped = genotype_result.get("genotypes_skipped", 0)
+                self.logger.info(
+                    "Loaded %d genotypes (skipped %d by ADJ filter)",
+                    genotypes_loaded,
+                    genotypes_skipped,
+                )
+
             await self._complete_audit(total_loaded)
-            self.logger.info(
-                "Completed load: %d variants loaded (batch_id=%s)", total_loaded, self.load_batch_id
-            )
+            skipped_count = streaming_parser.skipped_by_info_score
+            if skipped_count > 0:
+                self.logger.info(
+                    "Completed load: %d variants loaded (skipped %d with INFO < %.2f) (batch_id=%s)",
+                    total_loaded,
+                    skipped_count,
+                    self.config.min_info_score,
+                    self.load_batch_id,
+                )
+            else:
+                self.logger.info(
+                    "Completed load: %d variants loaded (batch_id=%s)",
+                    total_loaded,
+                    self.load_batch_id,
+                )
 
             if self._audit_logger:
                 await self._audit_logger.log_event(
@@ -384,6 +444,7 @@ class VCFLoader:
                         details={
                             "file_name": vcf_path.name,
                             "variants_loaded": total_loaded,
+                            "variants_skipped_info_score": skipped_count,
                             "parallel": parallel,
                         },
                     )
@@ -400,6 +461,10 @@ class VCFLoader:
             if is_reload:
                 result["is_reload"] = True
                 result["previous_load_id"] = str(previous_load_id)
+            if skipped_count > 0:
+                result["variants_skipped"] = skipped_count
+            if genotypes_loaded > 0:
+                result["genotypes_loaded"] = genotypes_loaded
 
             return result
 
@@ -439,6 +504,9 @@ class VCFLoader:
         if sample_id is not None:
             for record in batch:
                 record.sample_id = sample_id
+
+        if self._hapmap3_lookup is not None:
+            self._flag_hapmap3_variants(batch)
 
         records = [get_record_values(r, self.load_batch_id) for r in batch]
 
@@ -555,3 +623,48 @@ class VCFLoader:
             raise RuntimeError(error_msg) from errors[0]
 
         return sum(results)
+
+    async def _load_hapmap3_lookup(self) -> None:
+        """Load HapMap3 lookup table for variant flagging."""
+        from .references.hapmap3 import HapMap3Loader
+
+        panel_name = f"hapmap3_{self.config.hapmap3_build.lower()}"
+        loader = HapMap3Loader()
+
+        async with self.pool.acquire() as conn:
+            panel_exists = await conn.fetchval(
+                "SELECT EXISTS (SELECT 1 FROM reference_panels WHERE panel_name = $1)",
+                panel_name,
+            )
+
+            if not panel_exists:
+                self.logger.warning(
+                    "HapMap3 reference panel '%s' not loaded. "
+                    "Run 'vcf-pg-loader load-reference hapmap3 --build %s' first. "
+                    "Skipping HapMap3 flagging.",
+                    panel_name,
+                    self.config.hapmap3_build,
+                )
+                return
+
+            self._hapmap3_lookup = await loader.build_lookup(conn, panel_name)
+            self.logger.info(
+                "Loaded HapMap3 lookup with %d positions for variant flagging",
+                len(self._hapmap3_lookup),
+            )
+
+    def _flag_hapmap3_variants(self, batch: list[VariantRecord]) -> None:
+        """Flag variants that are in the HapMap3 reference panel."""
+        from .references.hapmap3 import match_hapmap3_variant
+
+        for record in batch:
+            result = match_hapmap3_variant(
+                lookup=self._hapmap3_lookup,
+                chrom=record.chrom,
+                pos=record.pos,
+                ref=record.ref,
+                alt=record.alt,
+            )
+            if result is not None:
+                record.in_hapmap3 = True
+                record.hapmap3_rsid = result.get("rsid")

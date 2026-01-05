@@ -307,6 +307,39 @@ def load(
             "Default: enabled. Use --no-hipaa-mode for local development.",
         ),
     ] = None,
+    min_info_score: Annotated[
+        float | None,
+        typer.Option(
+            "--min-info-score",
+            help="Filter imputed variants below this R²/INFO threshold (e.g., 0.8)",
+        ),
+    ] = None,
+    imputation_source: Annotated[
+        str,
+        typer.Option(
+            "--imputation-source",
+            help="Imputation source: minimac4, beagle, impute2, or auto (default: auto-detect)",
+        ),
+    ] = "auto",
+    store_genotypes: bool = typer.Option(
+        False, "--store-genotypes", help="Enable per-sample genotype storage"
+    ),
+    adj_filter: bool = typer.Option(
+        False,
+        "--adj-filter",
+        help="Only store genotypes passing ADJ criteria (GQ>=20, DP>=10, AB>=0.2)",
+    ),
+    dosage_only: bool = typer.Option(
+        False, "--dosage-only", help="Store only dosage values, not hard calls (space saving)"
+    ),
+    parallel_query_workers: Annotated[
+        int | None,
+        typer.Option(
+            "--parallel-query-workers",
+            help="PostgreSQL parallel query workers (max_parallel_workers_per_gather). "
+            "Higher values speed up PRS queries across chromosome partitions.",
+        ),
+    ] = None,
 ) -> None:
     """Load a VCF file into PostgreSQL.
 
@@ -363,6 +396,11 @@ def load(
             sanitize_headers=sanitize_headers,
             phi_scan=phi_scan,
             fail_on_phi=fail_on_phi,
+            min_info_score=min_info_score,
+            imputation_source=imputation_source,
+            store_genotypes=store_genotypes,
+            adj_filter=adj_filter,
+            dosage_only=dosage_only,
         )
     else:
         tls_config = TLSConfig(require_tls=require_tls)
@@ -378,6 +416,11 @@ def load(
             sanitize_headers=sanitize_headers,
             phi_scan=phi_scan,
             fail_on_phi=fail_on_phi,
+            min_info_score=min_info_score,
+            imputation_source=imputation_source,
+            store_genotypes=store_genotypes,
+            adj_filter=adj_filter,
+            dosage_only=dosage_only,
         )
 
     loader = VCFLoader(resolved_db_url, config)
@@ -420,12 +463,20 @@ def load(
             }
         else:
             if not quiet:
-                console.print(f"[green]✓[/green] Loaded {result['variants_loaded']:,} variants")
+                variants_skipped = result.get("variants_skipped", 0)
+                if variants_skipped > 0:
+                    console.print(
+                        f"[green]✓[/green] Loaded {result['variants_loaded']:,} variants "
+                        f"(skipped {variants_skipped:,} with INFO < {min_info_score})"
+                    )
+                else:
+                    console.print(f"[green]✓[/green] Loaded {result['variants_loaded']:,} variants")
                 console.print(f"  Batch ID: {result['load_batch_id']}")
                 console.print(f"  File SHA256: {result['file_hash']}")
             report_data = {
                 "status": "success",
                 "variants_loaded": result.get("variants_loaded", 0),
+                "variants_skipped": result.get("variants_skipped", 0),
                 "load_batch_id": str(result.get("load_batch_id", "")),
                 "file_hash": result.get("file_hash", ""),
             }
@@ -545,6 +596,20 @@ def init_db(
     require_tls: bool = typer.Option(
         True, "--require-tls/--no-require-tls", help="Require TLS for database connections"
     ),
+    create_validation_functions: Annotated[
+        bool,
+        typer.Option(
+            "--create-validation-functions/--skip-validation-functions",
+            help="Create SQL validation functions (HWE, allele frequency, etc.)",
+        ),
+    ] = True,
+    parallel_query_workers: Annotated[
+        int | None,
+        typer.Option(
+            "--parallel-query-workers",
+            help="Set PostgreSQL max_parallel_workers_per_gather for session",
+        ),
+    ] = None,
 ) -> None:
     """Initialize database schema.
 
@@ -553,6 +618,7 @@ def init_db(
     - Load audit table
     - Samples table
     - HIPAA-compliant audit logging (unless --skip-audit)
+    - SQL validation functions (HWE, allele frequency, n_eff, alleles_match)
     """
     resolved_db_url = _resolve_database_url(db_url, quiet=False)
     if not resolved_db_url:
@@ -575,6 +641,16 @@ def init_db(
                 partitions = await schema_manager.get_audit_partition_info(conn)
                 console.print(
                     f"[green]✓[/green] HIPAA audit schema created ({len(partitions)} partitions)"
+                )
+
+            if create_validation_functions:
+                await schema_manager.create_validation_functions(conn)
+                console.print("[green]✓[/green] SQL validation functions created")
+
+            if parallel_query_workers is not None:
+                await schema_manager.enable_parallel_query(conn, workers=parallel_query_workers)
+                console.print(
+                    f"[green]✓[/green] Parallel query workers set to {parallel_query_workers}"
                 )
 
         finally:
@@ -821,6 +897,467 @@ def list_annotations(
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1) from None
+
+
+@app.command("import-gwas")
+def import_gwas(
+    tsv_path: Annotated[Path, typer.Argument(help="Path to GWAS-SSF format TSV file")],
+    study_accession: Annotated[
+        str,
+        typer.Option("--study-accession", "-a", help="GWAS Catalog accession (e.g., GCST90002357)"),
+    ] = ...,
+    trait_name: Annotated[
+        str | None, typer.Option("--trait", "-t", help="Human-readable trait name")
+    ] = None,
+    trait_ontology_id: Annotated[str | None, typer.Option("--efo", help="EFO ontology ID")] = None,
+    publication_pmid: Annotated[str | None, typer.Option("--pmid", help="PubMed ID")] = None,
+    sample_size: Annotated[
+        int | None, typer.Option("--sample-size", "-n", help="Total sample size")
+    ] = None,
+    n_cases: Annotated[
+        int | None, typer.Option("--n-cases", help="Number of cases (binary traits)")
+    ] = None,
+    n_controls: Annotated[
+        int | None, typer.Option("--n-controls", help="Number of controls (binary traits)")
+    ] = None,
+    genome_build: Annotated[
+        str, typer.Option("--genome-build", "-g", help="Reference genome build")
+    ] = "GRCh38",
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+) -> None:
+    """Import GWAS summary statistics from a GWAS-SSF format TSV file.
+
+    Creates study metadata record and imports per-variant summary statistics.
+    Matches variants to existing database variants by chr:pos:ref:alt or rsID.
+    Computes is_effect_allele_alt to track effect allele orientation vs VCF.
+
+    Example:
+        vcf-pg-loader import-gwas gwas.tsv -a GCST90002357 -t "Height" -n 253288
+    """
+    setup_logging(verbose, quiet)
+
+    if not tsv_path.exists():
+        console.print(f"[red]Error: TSV file not found: {tsv_path}[/red]")
+        raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    from .gwas import GWASLoader, GWASSchemaManager
+
+    async def run_import() -> dict:
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            schema_manager = SchemaManager()
+            await schema_manager.create_schema(conn)
+
+            gwas_schema = GWASSchemaManager()
+            await gwas_schema.create_gwas_schema(conn)
+
+            loader = GWASLoader()
+            result = await loader.import_gwas(
+                conn=conn,
+                tsv_path=tsv_path,
+                study_accession=study_accession,
+                trait_name=trait_name,
+                trait_ontology_id=trait_ontology_id,
+                publication_pmid=publication_pmid,
+                sample_size=sample_size,
+                n_cases=n_cases,
+                n_controls=n_controls,
+                genome_build=genome_build,
+            )
+
+            await gwas_schema.create_gwas_indexes(conn)
+
+            return result
+        finally:
+            await conn.close()
+
+    try:
+        result = asyncio.run(run_import())
+        if not quiet:
+            console.print(f"[green]✓[/green] Imported {result['stats_imported']:,} statistics")
+            console.print(f"  Study ID: {result['study_id']}")
+            console.print(f"  Study Accession: {study_accession}")
+            console.print(f"  Matched variants: {result['stats_matched']:,}")
+            console.print(f"  Unmatched variants: {result['stats_unmatched']:,}")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@app.command("list-studies")
+def list_studies(
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """List all imported GWAS studies."""
+    import json
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_list() -> list:
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            from .gwas import GWASSchemaManager
+
+            gwas_schema = GWASSchemaManager()
+            if not await gwas_schema.verify_gwas_schema(conn):
+                return []
+
+            rows = await conn.fetch("""
+                SELECT study_id, study_accession, trait_name, sample_size,
+                       n_cases, n_controls, genome_build, created_at
+                FROM studies
+                ORDER BY created_at DESC
+            """)
+            return [dict(r) for r in rows]
+        finally:
+            await conn.close()
+
+    try:
+        studies = asyncio.run(run_list())
+
+        if json_output:
+            console.print(json.dumps(studies, indent=2, default=str))
+        elif studies:
+            for study in studies:
+                console.print(f"[cyan]{study['study_accession']}[/cyan]")
+                if study.get("trait_name"):
+                    console.print(f"  Trait: {study['trait_name']}")
+                if study.get("sample_size"):
+                    console.print(f"  Sample size: {study['sample_size']:,}")
+                if study.get("n_cases"):
+                    console.print(
+                        f"  Cases/Controls: {study['n_cases']:,}/{study.get('n_controls', 0):,}"
+                    )
+                console.print(f"  Genome build: {study.get('genome_build', 'N/A')}")
+                console.print()
+        else:
+            if not quiet:
+                console.print("[dim]No GWAS studies imported[/dim]")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@app.command("import-pgs")
+def import_pgs(
+    pgs_path: Annotated[Path, typer.Argument(help="Path to PGS Catalog scoring file")],
+    pgs_id: Annotated[
+        str | None,
+        typer.Option("--pgs-id", "-i", help="Override PGS ID from file header"),
+    ] = None,
+    validate_build: Annotated[
+        bool,
+        typer.Option("--validate-build", help="Validate genome build matches database"),
+    ] = False,
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+) -> None:
+    """Import PGS Catalog scoring file for PRS weights.
+
+    Parses PGS Catalog format files with header metadata (###PGS CATALOG SCORING FILE)
+    and imports per-variant weights. Matches variants to existing database variants
+    by chr:pos:ref:alt or rsID.
+
+    Supports advanced PRS features including interaction terms, haplotype effects,
+    and dominance/recessive models.
+
+    Example:
+        vcf-pg-loader import-pgs PGS000001.txt
+        vcf-pg-loader import-pgs PGS000001.txt --validate-build
+    """
+    setup_logging(verbose, quiet)
+
+    if not pgs_path.exists():
+        console.print(f"[red]Error: PGS file not found: {pgs_path}[/red]")
+        raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    from .prs import PGSLoader, PRSSchemaManager
+
+    async def run_import() -> dict:
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            prs_schema = PRSSchemaManager()
+            await prs_schema.create_prs_schema(conn)
+
+            loader = PGSLoader()
+            result = await loader.import_pgs(
+                conn=conn,
+                pgs_path=pgs_path,
+                pgs_id_override=pgs_id,
+                validate_build=validate_build,
+            )
+
+            return result
+        finally:
+            await conn.close()
+
+    try:
+        result = asyncio.run(run_import())
+        if not quiet:
+            console.print(f"[green]✓[/green] Imported {result['weights_imported']:,} weights")
+            console.print(f"  PGS ID: {result['pgs_id']}")
+            console.print(f"  Matched variants: {result['weights_matched']:,}")
+            console.print(f"  Unmatched variants: {result['weights_unmatched']:,}")
+            match_rate = (
+                result["weights_matched"] / result["weights_imported"] * 100
+                if result["weights_imported"] > 0
+                else 0
+            )
+            console.print(f"  Match rate: {match_rate:.1f}%")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@app.command("list-pgs")
+def list_pgs(
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+) -> None:
+    """List all imported PGS Catalog scores."""
+    import json
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    async def run_list() -> list:
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            from .prs import PRSSchemaManager
+
+            prs_schema = PRSSchemaManager()
+            if not await prs_schema.verify_prs_schema(conn):
+                return []
+
+            return await prs_schema.list_scores(conn)
+        finally:
+            await conn.close()
+
+    try:
+        scores = asyncio.run(run_list())
+
+        if json_output:
+            console.print(json.dumps(scores, indent=2, default=str))
+        elif scores:
+            for score in scores:
+                console.print(f"[cyan]{score['pgs_id']}[/cyan]")
+                if score.get("trait_name"):
+                    console.print(f"  Trait: {score['trait_name']}")
+                if score.get("weight_type"):
+                    console.print(f"  Weight type: {score['weight_type']}")
+                console.print(f"  Genome build: {score.get('genome_build', 'N/A')}")
+                console.print(f"  Weights: {score.get('weight_count', 0):,}")
+                console.print(f"  Matched: {score.get('matched_count', 0):,}")
+                console.print()
+        else:
+            if not quiet:
+                console.print("[dim]No PGS scores imported[/dim]")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@app.command("import-frequencies")
+def import_frequencies(
+    vcf_path: Annotated[Path, typer.Argument(help="Path to VCF file with population frequencies")],
+    source: Annotated[
+        str,
+        typer.Option(
+            "--source",
+            "-s",
+            help="Frequency source (gnomAD_v2.1, gnomAD_v3, gnomAD_v4, TOPMed)",
+        ),
+    ] = ...,
+    subset: Annotated[
+        str, typer.Option("--subset", help="Data subset (all, controls, non_neuro, non_cancer)")
+    ] = "all",
+    prefix: Annotated[
+        str, typer.Option("--prefix", help="INFO field prefix (e.g., 'gnomad_' for vcfanno)")
+    ] = "",
+    update_popmax: Annotated[
+        bool, typer.Option("--update-popmax/--no-update-popmax", help="Update popmax in variants")
+    ] = True,
+    batch_size: Annotated[
+        int, typer.Option("--batch-size", "-b", help="Batch size for imports")
+    ] = 10000,
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+) -> None:
+    """Import population frequencies from gnomAD-annotated VCF.
+
+    Parses gnomAD INFO fields for all populations (AFR, AMR, ASJ, EAS, FIN, NFE, SAS)
+    and stores them in the normalized population_frequencies table. Automatically
+    computes popmax (excluding bottlenecked populations ASJ/FIN) and updates variants.
+
+    Supports:
+    - Direct gnomAD VCF files
+    - Pre-annotated VCF files (via vcfanno)
+    - gnomAD v2, v3, v4 formats
+    - TOPMed format
+
+    Example:
+        vcf-pg-loader import-frequencies annotated.vcf.gz -s gnomAD_v3 --db postgresql://...
+    """
+    setup_logging(verbose, quiet)
+
+    if not vcf_path.exists():
+        console.print(f"[red]Error: VCF file not found: {vcf_path}[/red]")
+        raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    from .annotations import PopulationFreqLoader, PopulationFreqSchemaManager
+
+    async def run_import() -> dict:
+        import cyvcf2
+
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            popfreq_schema = PopulationFreqSchemaManager()
+            await popfreq_schema.create_population_frequencies_table(conn)
+            await popfreq_schema.create_popfreq_indexes(conn)
+
+            variant_lookup = await _build_variant_lookup(conn)
+
+            loader = PopulationFreqLoader(batch_size=batch_size)
+            vcf = cyvcf2.VCF(str(vcf_path))
+
+            total_variants = 0
+            matched_variants = 0
+            frequencies_inserted = 0
+            batch = []
+
+            for variant in vcf:
+                total_variants += 1
+                chrom = variant.CHROM
+                if not chrom.startswith("chr"):
+                    chrom = f"chr{chrom}"
+
+                key = (chrom, variant.POS, variant.REF, variant.ALT[0] if variant.ALT else "")
+                variant_id = variant_lookup.get(key)
+
+                if variant_id is None:
+                    continue
+
+                matched_variants += 1
+                info_dict = _extract_info_dict(variant)
+                batch.append((variant_id, info_dict))
+
+                if len(batch) >= batch_size:
+                    result = await loader.import_batch_frequencies(
+                        conn=conn,
+                        batch=batch,
+                        source=source,
+                        subset=subset,
+                        prefix=prefix,
+                        update_popmax=update_popmax,
+                    )
+                    frequencies_inserted += result["frequencies_inserted"]
+                    batch = []
+
+            if batch:
+                result = await loader.import_batch_frequencies(
+                    conn=conn,
+                    batch=batch,
+                    source=source,
+                    subset=subset,
+                    prefix=prefix,
+                    update_popmax=update_popmax,
+                )
+                frequencies_inserted += result["frequencies_inserted"]
+
+            vcf.close()
+
+            return {
+                "total_variants": total_variants,
+                "matched_variants": matched_variants,
+                "frequencies_inserted": frequencies_inserted,
+            }
+        finally:
+            await conn.close()
+
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=console,
+            disable=quiet,
+        ) as progress:
+            progress.add_task("Importing frequencies...", total=None)
+            result = asyncio.run(run_import())
+
+        if not quiet:
+            console.print(f"[green]✓[/green] Imported frequencies from {vcf_path.name}")
+            console.print(f"  Source: {source}")
+            console.print(f"  Variants processed: {result['total_variants']:,}")
+            console.print(f"  Matched variants: {result['matched_variants']:,}")
+            console.print(f"  Frequencies inserted: {result['frequencies_inserted']:,}")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+async def _build_variant_lookup(conn: asyncpg.Connection) -> dict[tuple, int]:
+    """Build lookup dict mapping (chrom, pos, ref, alt) to variant_id."""
+    rows = await conn.fetch("""
+        SELECT variant_id, chrom, pos, ref, alt
+        FROM variants
+    """)
+    return {(row["chrom"], row["pos"], row["ref"], row["alt"]): row["variant_id"] for row in rows}
+
+
+def _extract_info_dict(variant) -> dict:
+    """Extract INFO fields from cyvcf2 variant as dictionary."""
+    info_dict = {}
+    for key in variant.INFO:
+        try:
+            value = variant.INFO.get(key)
+            info_dict[key] = value
+        except Exception:
+            pass
+    return info_dict
 
 
 @app.command("annotate")
@@ -1136,6 +1673,497 @@ def db_reset(
         raise typer.Exit(1) from None
 
 
+def _load_ld_blocks(
+    bed_path: Path | None,
+    build: str,
+    population: str | None,
+    db_url: str | None,
+    quiet: bool,
+) -> None:
+    """Helper to load LD blocks."""
+    if population is None:
+        console.print("[red]Error: --population is required for ld-blocks[/red]")
+        raise typer.Exit(1)
+
+    population = population.upper()
+    valid_pops = ("EUR", "AFR", "ASN", "EAS", "SAS")
+    if population not in valid_pops:
+        console.print(f"[red]Error: Invalid population '{population}'. Use EUR, AFR, or ASN[/red]")
+        raise typer.Exit(1)
+
+    pop_for_cache = population.lower()
+    if population in ("EAS", "SAS"):
+        pop_for_cache = "asn"
+        if not quiet:
+            console.print(
+                f"[yellow]Note: {population} mapped to ASN (ldetect-data source)[/yellow]"
+            )
+
+    build = build.lower()
+    if build not in ("grch37", "grch38"):
+        console.print(f"[red]Error: Invalid build '{build}'. Use grch37 or grch38[/red]")
+        raise typer.Exit(1)
+
+    if bed_path is None:
+        from .references.ld_blocks_download import LDBlockDownloadConfig
+
+        download_config = LDBlockDownloadConfig(population=pop_for_cache, build=build)
+        cached_path = download_config.get_cache_path()
+
+        if cached_path.exists():
+            bed_path = cached_path
+            if not quiet:
+                console.print(f"[dim]Using cached LD blocks: {cached_path}[/dim]")
+        else:
+            import importlib.resources
+
+            try:
+                with importlib.resources.files("vcf_pg_loader").joinpath(
+                    f"data/references/ld_blocks_{pop_for_cache}_{build}.bed.gz"
+                ) as bundled_path:
+                    if bundled_path.exists():
+                        bed_path = Path(bundled_path)
+                    else:
+                        data_dir = Path(__file__).parent / "data" / "references"
+                        bed_path = data_dir / f"ld_blocks_{pop_for_cache}_{build}.bed.gz"
+                        if not bed_path.exists():
+                            bed_path = data_dir / f"ld_blocks_{pop_for_cache}_{build}.bed"
+            except Exception:
+                data_dir = Path(__file__).parent / "data" / "references"
+                bed_path = data_dir / f"ld_blocks_{pop_for_cache}_{build}.bed.gz"
+                if not bed_path.exists():
+                    bed_path = data_dir / f"ld_blocks_{pop_for_cache}_{build}.bed"
+
+    if not bed_path.exists():
+        console.print(
+            f"[red]Error: LD blocks file not found: {bed_path}[/red]\n"
+            f"[yellow]Tip: Download LD blocks with:[/yellow]\n"
+            f"  vcf-pg-loader download-reference ld-blocks --population {pop_for_cache}\n"
+            f"Or provide a path to your own LD blocks BED file."
+        )
+        raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    from .references import LDBlockLoader, ReferenceSchemaManager
+
+    async def run_load() -> dict:
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            ref_schema = ReferenceSchemaManager()
+            await ref_schema.create_ld_blocks_table(conn)
+
+            loader = LDBlockLoader()
+            result = await loader.load_berisa_pickrell_blocks(
+                conn=conn,
+                bed_path=bed_path,
+                population=population,
+                build=build,
+            )
+
+            return result
+        finally:
+            await conn.close()
+
+    try:
+        result = asyncio.run(run_load())
+        if not quiet:
+            console.print(f"[green]✓[/green] Loaded {result['blocks_loaded']:,} LD blocks")
+            console.print(f"  Population: {result['population']}")
+            console.print(f"  Build: {result['build']}")
+            console.print(f"  Source: {result['source']}")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@app.command("download-reference")
+def download_reference(
+    panel_type: Annotated[
+        str,
+        typer.Argument(help="Reference panel type (hapmap3, ld-blocks)"),
+    ],
+    build: Annotated[
+        str,
+        typer.Option("--build", "-b", help="Genome build (grch37 or grch38)"),
+    ] = "grch38",
+    population: Annotated[
+        str,
+        typer.Option("--population", "-p", help="Population for LD blocks (eur, afr, asn)"),
+    ] = "eur",
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Output directory for downloaded files"),
+    ] = None,
+    force: bool = typer.Option(False, "--force", "-f", help="Force re-download even if cached"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+) -> None:
+    """Download reference panel data for PRS analysis.
+
+    Downloads HapMap3 (~1.1M SNPs) or LD blocks from authoritative sources.
+    Files are cached locally for reuse.
+
+    Example:
+        vcf-pg-loader download-reference hapmap3 --build grch38
+        vcf-pg-loader download-reference hapmap3 --build grch37 --force
+        vcf-pg-loader download-reference ld-blocks --population eur
+        vcf-pg-loader download-reference ld-blocks --population afr --output /custom/path
+    """
+    setup_logging(verbose, quiet)
+
+    panel_type_lower = panel_type.lower().replace("_", "-")
+
+    if panel_type_lower == "hapmap3":
+        _download_hapmap3(build, output, force, quiet)
+    elif panel_type_lower == "ld-blocks":
+        _download_ld_blocks(population, build, output, force, quiet)
+    else:
+        console.print(
+            f"[red]Error: Unknown panel type '{panel_type}'. " "Supported: hapmap3, ld-blocks[/red]"
+        )
+        raise typer.Exit(1)
+
+
+def _download_hapmap3(build: str, output: Path | None, force: bool, quiet: bool) -> None:
+    """Download HapMap3 reference panel."""
+    from .references.hapmap3_download import HapMap3DownloadConfig, HapMap3Downloader
+
+    try:
+        config = HapMap3DownloadConfig(
+            build=build,
+            cache_dir=output if output else HapMap3DownloadConfig().cache_dir,
+        )
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+    downloader = HapMap3Downloader(config)
+
+    if not quiet:
+        if downloader.is_cached() and not force:
+            console.print(f"[yellow]HapMap3 {build} already cached at:[/yellow]")
+            console.print(f"  {config.get_cache_path()}")
+            console.print("[dim]Use --force to re-download[/dim]")
+            return
+
+    async def run_download() -> Path:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=console,
+            disable=quiet,
+        ) as progress:
+            task = progress.add_task(f"Downloading HapMap3 {build}...", total=None)
+
+            def update_progress(downloaded: int, total: int) -> None:
+                progress.update(task, completed=downloaded, total=total)
+
+            result = await downloader.download(
+                force=force,
+                progress_callback=update_progress if not quiet else None,
+            )
+            return result
+
+    try:
+        result_path = asyncio.run(run_download())
+        if not quiet:
+            console.print("[green]✓[/green] Downloaded HapMap3 reference")
+            console.print(f"  Path: {result_path}")
+            console.print(f"  Build: {build}")
+    except Exception as e:
+        console.print(f"[red]Error downloading reference: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+def _download_ld_blocks(
+    population: str, build: str, output: Path | None, force: bool, quiet: bool
+) -> None:
+    """Download LD block definitions."""
+    import warnings
+
+    from .references.ld_blocks_download import LDBlockDownloadConfig, LDBlockDownloader
+
+    try:
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            config = LDBlockDownloadConfig(
+                population=population,
+                build=build,
+                cache_dir=output if output else LDBlockDownloadConfig().cache_dir,
+            )
+            for warning in w:
+                if not quiet:
+                    console.print(f"[yellow]Warning: {warning.message}[/yellow]")
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+    downloader = LDBlockDownloader(config)
+
+    if not quiet:
+        if downloader.is_cached() and not force:
+            console.print(f"[yellow]LD blocks {population.upper()} already cached at:[/yellow]")
+            console.print(f"  {config.get_cache_path()}")
+            console.print("[dim]Use --force to re-download[/dim]")
+            return
+
+    async def run_download() -> Path:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=console,
+            disable=quiet,
+        ) as progress:
+            task = progress.add_task(f"Downloading LD blocks ({population.upper()})...", total=None)
+
+            def update_progress(downloaded: int, total: int) -> None:
+                progress.update(task, completed=downloaded, total=total)
+
+            result = await downloader.download(
+                force=force,
+                progress_callback=update_progress if not quiet else None,
+            )
+            return result
+
+    try:
+        result_path = asyncio.run(run_download())
+        if not quiet:
+            console.print("[green]✓[/green] Downloaded LD blocks")
+            console.print(f"  Path: {result_path}")
+            console.print(f"  Population: {population.upper()}")
+            console.print(f"  Build: {build}")
+    except Exception as e:
+        console.print(f"[red]Error downloading reference: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@app.command("load-reference")
+def load_reference(
+    panel_type: Annotated[
+        str,
+        typer.Argument(help="Reference panel type (hapmap3, ld-blocks)"),
+    ],
+    file_path: Annotated[
+        Path | None,
+        typer.Argument(help="Path to reference panel file (TSV or BED)"),
+    ] = None,
+    build: Annotated[
+        str,
+        typer.Option("--build", "-b", help="Genome build (grch37 or grch38)"),
+    ] = "grch38",
+    population: Annotated[
+        str | None,
+        typer.Option("--population", "-p", help="Population for LD blocks (EUR, AFR, EAS, SAS)"),
+    ] = None,
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+) -> None:
+    """Load a reference panel into the database for PRS analysis.
+
+    Reference panels like HapMap3 are used by PRS-CS, LDpred2, and other
+    Bayesian PRS methods to restrict analysis to well-characterized SNPs.
+
+    LD blocks from Berisa & Pickrell (2016) are used by PRS-CS and SBayesR
+    to partition the genome into largely independent regions.
+
+    If no file path is provided, looks for bundled reference data in the
+    package data directory.
+
+    Example:
+        vcf-pg-loader load-reference hapmap3 --build grch38
+        vcf-pg-loader load-reference hapmap3 /path/to/hapmap3.tsv --build grch37
+        vcf-pg-loader load-reference ld-blocks --population EUR --build grch37
+        vcf-pg-loader load-reference ld-blocks /path/to/blocks.bed --population EUR
+    """
+    setup_logging(verbose, quiet)
+
+    panel_type_lower = panel_type.lower().replace("_", "-")
+    if panel_type_lower not in ("hapmap3", "ld-blocks"):
+        console.print(
+            f"[red]Error: Unknown panel type '{panel_type}'. Supported: hapmap3, ld-blocks[/red]"
+        )
+        raise typer.Exit(1)
+
+    if panel_type_lower == "ld-blocks":
+        _load_ld_blocks(file_path, build, population, db_url, quiet)
+        return
+
+    tsv_path = file_path
+    if panel_type_lower != "hapmap3":
+        console.print(f"[red]Error: Unknown panel type '{panel_type}'. Supported: hapmap3[/red]")
+        raise typer.Exit(1)
+
+    build = build.lower()
+    if build not in ("grch37", "grch38"):
+        console.print(f"[red]Error: Invalid build '{build}'. Use grch37 or grch38[/red]")
+        raise typer.Exit(1)
+
+    if tsv_path is None:
+        from .references.hapmap3_download import HapMap3DownloadConfig
+
+        download_config = HapMap3DownloadConfig(build=build)
+        cached_path = download_config.get_cache_path()
+
+        if cached_path.exists():
+            tsv_path = cached_path
+            if not quiet:
+                console.print(f"[dim]Using cached HapMap3: {cached_path}[/dim]")
+        else:
+            import importlib.resources
+
+            try:
+                with importlib.resources.files("vcf_pg_loader").joinpath(
+                    f"data/references/hapmap3_{build}.tsv.gz"
+                ) as bundled_path:
+                    if bundled_path.exists():
+                        tsv_path = Path(bundled_path)
+                    else:
+                        data_dir = Path(__file__).parent / "data" / "references"
+                        tsv_path = data_dir / f"hapmap3_{build}.tsv.gz"
+                        if not tsv_path.exists():
+                            tsv_path = data_dir / f"hapmap3_{build}.tsv"
+            except Exception:
+                data_dir = Path(__file__).parent / "data" / "references"
+                tsv_path = data_dir / f"hapmap3_{build}.tsv.gz"
+                if not tsv_path.exists():
+                    tsv_path = data_dir / f"hapmap3_{build}.tsv"
+
+    if not tsv_path.exists():
+        console.print(
+            f"[red]Error: Reference file not found: {tsv_path}[/red]\n"
+            f"[yellow]Tip: Download the full HapMap3 reference with:[/yellow]\n"
+            f"  vcf-pg-loader download-reference hapmap3 --build {build}\n"
+            f"Or provide a path to your own HapMap3 file."
+        )
+        raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    from .references import HapMap3Loader, ReferenceSchemaManager
+
+    async def run_load() -> dict:
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            ref_schema = ReferenceSchemaManager()
+            await ref_schema.create_reference_panels_table(conn)
+
+            loader = HapMap3Loader()
+            result = await loader.load_reference_panel(
+                conn=conn,
+                tsv_path=tsv_path,
+                build=build,
+            )
+
+            return result
+        finally:
+            await conn.close()
+
+    try:
+        result = asyncio.run(run_load())
+        if not quiet:
+            console.print(f"[green]✓[/green] Loaded {result['variants_loaded']:,} variants")
+            console.print(f"  Panel: {result['panel_name']}")
+            console.print(f"  Build: {result['build']}")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@app.command("annotate-ld-blocks")
+def annotate_ld_blocks(
+    population: Annotated[
+        str,
+        typer.Option("--population", "-p", help="Population (EUR, AFR, EAS, SAS)"),
+    ] = "EUR",
+    build: Annotated[
+        str | None,
+        typer.Option("--build", "-b", help="Optional genome build filter"),
+    ] = None,
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+) -> None:
+    """Annotate loaded variants with LD block assignments.
+
+    Assigns each variant to the LD block containing its position using
+    efficient range queries. LD blocks must be loaded first using:
+        vcf-pg-loader load-reference ld-blocks --population EUR
+
+    Example:
+        vcf-pg-loader annotate-ld-blocks --population EUR
+        vcf-pg-loader annotate-ld-blocks --population AFR --build grch37
+    """
+    setup_logging(verbose, quiet)
+
+    population = population.upper()
+    if population not in ("EUR", "AFR", "EAS", "SAS"):
+        console.print(
+            f"[red]Error: Invalid population '{population}'. Use EUR, AFR, EAS, or SAS[/red]"
+        )
+        raise typer.Exit(1)
+
+    if build:
+        build = build.lower()
+        if build not in ("grch37", "grch38"):
+            console.print(f"[red]Error: Invalid build '{build}'. Use grch37 or grch38[/red]")
+            raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    from .references import LDBlockLoader, ReferenceSchemaManager
+
+    async def run_annotate() -> int:
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            ref_schema = ReferenceSchemaManager()
+            await ref_schema.add_ld_block_id_column(conn)
+
+            loader = LDBlockLoader()
+            updated = await loader.assign_variants_to_blocks(
+                conn=conn,
+                population=population,
+                build=build,
+            )
+
+            return updated
+        finally:
+            await conn.close()
+
+    try:
+        updated = asyncio.run(run_annotate())
+        if not quiet:
+            console.print(
+                f"[green]✓[/green] Assigned {updated:,} variants to {population} LD blocks"
+            )
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
 @app.command()
 def doctor(
     check_container_security: bool = typer.Option(
@@ -1201,6 +2229,190 @@ def doctor(
             console.print("      Database features require Docker or external PostgreSQL.")
         else:
             console.print("\nSee docs/deployment/container-security.md for remediation.")
+
+
+@app.command("compute-sample-qc")
+def compute_sample_qc(
+    batch_id: Annotated[
+        int | None, typer.Option("--batch-id", "-b", help="Batch audit_id to compute QC for")
+    ] = None,
+    sample_id: Annotated[
+        str | None, typer.Option("--sample-id", "-s", help="Single sample ID to compute QC for")
+    ] = None,
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+) -> None:
+    """Compute sample-level QC metrics from loaded genotype data.
+
+    Computes per-sample metrics including call rate, het/hom ratio, Ti/Tv ratio,
+    sex inference from X chromosome heterozygosity, and F_inbreeding coefficient.
+
+    Samples pass QC if:
+    - call_rate >= 99%
+    - contamination_estimate < 2.5% (or not available)
+    - sex_concordant = TRUE (or not available)
+
+    Example:
+        vcf-pg-loader compute-sample-qc --batch-id 1
+        vcf-pg-loader compute-sample-qc --sample-id SAMPLE001
+    """
+    setup_logging(verbose, quiet)
+
+    if batch_id is None and sample_id is None:
+        console.print("[red]Error: Either --batch-id or --sample-id required[/red]")
+        raise typer.Exit(1)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    from .qc.sample_qc import SampleQCComputer
+    from .qc.schema import SampleQCSchemaManager
+
+    async def run_compute() -> dict:
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            schema_manager = SampleQCSchemaManager()
+            await schema_manager.create_sample_qc_schema(conn)
+
+            computer = SampleQCComputer(schema_manager)
+
+            if batch_id is not None:
+                result = await computer.compute_for_batch(conn, batch_id)
+            else:
+                metrics = await computer.compute_for_sample(conn, sample_id)
+                result = metrics.to_db_row()
+                result["qc_pass"] = (
+                    metrics.call_rate >= 0.99
+                    and (
+                        metrics.contamination_estimate is None
+                        or metrics.contamination_estimate < 0.025
+                    )
+                    and (metrics.sex_concordant is None or metrics.sex_concordant)
+                )
+
+            return result
+        finally:
+            await conn.close()
+
+    try:
+        result = asyncio.run(run_compute())
+
+        if json_output:
+            import json as json_module
+
+            console.print(json_module.dumps(result, indent=2, default=str))
+        elif not quiet:
+            if batch_id is not None:
+                n_samples = result["samples_processed"]
+                console.print(f"[green]✓[/green] Computed QC for {n_samples} samples")
+                console.print(f"  Batch ID: {batch_id}")
+                console.print(f"  Pass: {result['samples_pass']}")
+                console.print(f"  Fail: {result['samples_fail']}")
+                console.print(f"  Mean call rate: {result['mean_call_rate']:.4f}")
+            else:
+                status = "[green]PASS[/green]" if result.get("qc_pass") else "[red]FAIL[/red]"
+                console.print(f"Sample QC: {status}")
+                console.print(f"  Sample ID: {result['sample_id']}")
+                console.print(f"  Call rate: {result['call_rate']:.4f}")
+                if result.get("het_hom_ratio"):
+                    console.print(f"  Het/Hom ratio: {result['het_hom_ratio']:.4f}")
+                if result.get("ti_tv_ratio"):
+                    console.print(f"  Ti/Tv ratio: {result['ti_tv_ratio']:.4f}")
+                if result.get("sex_inferred"):
+                    console.print(f"  Inferred sex: {result['sex_inferred']}")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@app.command("refresh-views")
+def refresh_views(
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    concurrent: bool = typer.Option(
+        True, "--concurrent/--no-concurrent", help="Use CONCURRENTLY to avoid blocking reads"
+    ),
+    create: bool = typer.Option(False, "--create", help="Create views if they don't exist"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+) -> None:
+    """Refresh PRS materialized views.
+
+    Refreshes pre-computed materialized views for common PRS query patterns:
+    - prs_candidate_variants: HapMap3 variants passing QC filters
+    - variant_qc_summary: Aggregate QC counts
+    - chromosome_variant_counts: Per-chromosome summary
+
+    Use --concurrent (default) to refresh without blocking reads.
+    Use --create to create views if they don't exist.
+
+    Example:
+        vcf-pg-loader refresh-views --db postgresql://localhost/variants
+        vcf-pg-loader refresh-views --create --no-concurrent
+    """
+    setup_logging(verbose, quiet)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    from .views.prs_views import PRSViewsManager
+
+    async def run_refresh() -> dict[str, float]:
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            mgr = PRSViewsManager()
+
+            views_exist = await mgr.verify_prs_views(conn)
+            if not views_exist:
+                if create:
+                    if not quiet:
+                        console.print("Creating PRS materialized views...")
+                    await mgr.create_prs_materialized_views(conn)
+                else:
+                    console.print(
+                        "[red]Error: PRS views do not exist. Use --create to create them.[/red]"
+                    )
+                    raise typer.Exit(1)
+
+            if not quiet:
+                mode = "concurrently" if concurrent else "blocking"
+                console.print(f"Refreshing PRS views ({mode})...")
+
+            timings = await mgr.refresh_prs_views(conn, concurrent=concurrent)
+            return timings
+        finally:
+            await conn.close()
+
+    try:
+        timings = asyncio.run(run_refresh())
+
+        if json_output:
+            import json as json_module
+
+            console.print(json_module.dumps(timings, indent=2))
+        elif not quiet:
+            console.print("[green]✓[/green] PRS views refreshed")
+            for view_name, elapsed in timings.items():
+                console.print(f"  {view_name}: {elapsed:.3f}s")
+            total = sum(timings.values())
+            console.print(f"  Total: {total:.3f}s")
+    except Exception as e:
+        if not isinstance(e, SystemExit):
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from None
+        raise
 
 
 audit_app = typer.Typer(help="HIPAA audit log management and verification")
@@ -6025,6 +7237,245 @@ def compliance_status(
                 f"{report.warned_count} warnings"
             )
 
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+export_app = typer.Typer(help="Export data to PRS tool formats")
+app.add_typer(export_app, name="export")
+
+
+@export_app.command("plink-score")
+def export_plink_score_cmd(
+    study_id: Annotated[int, typer.Option("--study-id", "-s", help="GWAS study ID to export")],
+    output: Annotated[Path, typer.Option("--output", "-o", help="Output file path")],
+    hapmap3_only: bool = typer.Option(False, "--hapmap3-only", help="Restrict to HapMap3 variants"),
+    min_info: Annotated[
+        float | None, typer.Option("--min-info", help="Minimum imputation INFO score")
+    ] = None,
+    min_maf: Annotated[float | None, typer.Option("--min-maf", help="Minimum MAF")] = None,
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+) -> None:
+    """Export GWAS summary statistics in PLINK 2.0 --score format.
+
+    Output format:
+        SNP     A1      BETA
+        rs123   A       0.05
+
+    Example:
+        vcf-pg-loader export plink-score --study-id 1 --output scores.txt
+        vcf-pg-loader export plink-score -s 1 -o scores.txt --hapmap3-only --min-info 0.8
+    """
+    setup_logging(verbose, quiet)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    from .export.prs_formats import VariantFilter, export_plink_score
+
+    async def run_export() -> int:
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            variant_filter = VariantFilter(
+                hapmap3_only=hapmap3_only,
+                min_info=min_info,
+                min_maf=min_maf,
+            )
+            return await export_plink_score(conn, study_id, output, variant_filter)
+        finally:
+            await conn.close()
+
+    try:
+        count = asyncio.run(run_export())
+        if not quiet:
+            console.print(f"[green]✓[/green] Exported {count:,} variants to {output}")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@export_app.command("prs-cs")
+def export_prs_cs_cmd(
+    study_id: Annotated[int, typer.Option("--study-id", "-s", help="GWAS study ID to export")],
+    output: Annotated[Path, typer.Option("--output", "-o", help="Output file path")],
+    use_se: bool = typer.Option(
+        True, "--use-se/--use-p", help="Include SE (default) or P-value in last column"
+    ),
+    hapmap3_only: bool = typer.Option(False, "--hapmap3-only", help="Restrict to HapMap3 variants"),
+    min_info: Annotated[
+        float | None, typer.Option("--min-info", help="Minimum imputation INFO score")
+    ] = None,
+    min_maf: Annotated[float | None, typer.Option("--min-maf", help="Minimum MAF")] = None,
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+) -> None:
+    """Export GWAS summary statistics in PRS-CS format.
+
+    Output format (with --use-se):
+        SNP     A1      A2      BETA    SE
+        rs123   A       G       0.05    0.01
+
+    Output format (with --use-p):
+        SNP     A1      A2      BETA    P
+        rs123   A       G       0.05    1e-8
+
+    Example:
+        vcf-pg-loader export prs-cs --study-id 1 --output prscs.txt
+        vcf-pg-loader export prs-cs -s 1 -o prscs.txt --use-p --hapmap3-only
+    """
+    setup_logging(verbose, quiet)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    from .export.prs_formats import VariantFilter, export_prs_cs
+
+    async def run_export() -> int:
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            variant_filter = VariantFilter(
+                hapmap3_only=hapmap3_only,
+                min_info=min_info,
+                min_maf=min_maf,
+            )
+            return await export_prs_cs(conn, study_id, output, use_se, variant_filter)
+        finally:
+            await conn.close()
+
+    try:
+        count = asyncio.run(run_export())
+        if not quiet:
+            console.print(f"[green]✓[/green] Exported {count:,} variants to {output}")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@export_app.command("ldpred2")
+def export_ldpred2_cmd(
+    study_id: Annotated[int, typer.Option("--study-id", "-s", help="GWAS study ID to export")],
+    output: Annotated[Path, typer.Option("--output", "-o", help="Output file path")],
+    hapmap3_only: bool = typer.Option(False, "--hapmap3-only", help="Restrict to HapMap3 variants"),
+    min_info: Annotated[
+        float | None, typer.Option("--min-info", help="Minimum imputation INFO score")
+    ] = None,
+    min_maf: Annotated[float | None, typer.Option("--min-maf", help="Minimum MAF")] = None,
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+) -> None:
+    """Export GWAS summary statistics in LDpred2 bigsnpr format.
+
+    Output format:
+        chr     pos     a0      a1      beta    beta_se n_eff
+        1       12345   G       A       0.05    0.01    50000
+
+    The n_eff (effective sample size) is computed automatically:
+    - For case-control: n_eff = 4 / (1/n_cases + 1/n_controls)
+    - For quantitative traits: n_eff = sample_size
+
+    Example:
+        vcf-pg-loader export ldpred2 --study-id 1 --output ldpred2.txt
+        vcf-pg-loader export ldpred2 -s 1 -o ldpred2.txt --hapmap3-only
+    """
+    setup_logging(verbose, quiet)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    from .export.prs_formats import VariantFilter, export_ldpred2
+
+    async def run_export() -> int:
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            variant_filter = VariantFilter(
+                hapmap3_only=hapmap3_only,
+                min_info=min_info,
+                min_maf=min_maf,
+            )
+            return await export_ldpred2(conn, study_id, output, variant_filter)
+        finally:
+            await conn.close()
+
+    try:
+        count = asyncio.run(run_export())
+        if not quiet:
+            console.print(f"[green]✓[/green] Exported {count:,} variants to {output}")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@export_app.command("prsice2")
+def export_prsice2_cmd(
+    study_id: Annotated[int, typer.Option("--study-id", "-s", help="GWAS study ID to export")],
+    output: Annotated[Path, typer.Option("--output", "-o", help="Output file path")],
+    hapmap3_only: bool = typer.Option(False, "--hapmap3-only", help="Restrict to HapMap3 variants"),
+    min_info: Annotated[
+        float | None, typer.Option("--min-info", help="Minimum imputation INFO score")
+    ] = None,
+    min_maf: Annotated[float | None, typer.Option("--min-maf", help="Minimum MAF")] = None,
+    db_url: Annotated[str | None, typer.Option("--db", "-d", help="PostgreSQL URL")] = None,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+) -> None:
+    """Export GWAS summary statistics in PRSice-2 format.
+
+    Output format:
+        SNP     A1      A2      BETA    SE      P
+        rs123   A       G       0.05    0.01    1e-8
+
+    Example:
+        vcf-pg-loader export prsice2 --study-id 1 --output prsice2.txt
+        vcf-pg-loader export prsice2 -s 1 -o prsice2.txt --hapmap3-only --min-maf 0.01
+    """
+    setup_logging(verbose, quiet)
+
+    try:
+        resolved_db_url = _resolve_database_url(db_url, quiet)
+    except CredentialValidationError as e:
+        console.print(f"[red]Security Error: {e}[/red]")
+        raise typer.Exit(1) from None
+    if resolved_db_url is None:
+        raise typer.Exit(1)
+
+    from .export.prs_formats import VariantFilter, export_prsice2
+
+    async def run_export() -> int:
+        conn = await asyncpg.connect(resolved_db_url, ssl=_get_ssl_param())
+        try:
+            variant_filter = VariantFilter(
+                hapmap3_only=hapmap3_only,
+                min_info=min_info,
+                min_maf=min_maf,
+            )
+            return await export_prsice2(conn, study_id, output, variant_filter)
+        finally:
+            await conn.close()
+
+    try:
+        count = asyncio.run(run_export())
+        if not quiet:
+            console.print(f"[green]✓[/green] Exported {count:,} variants to {output}")
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1) from None

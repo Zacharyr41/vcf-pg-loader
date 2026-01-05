@@ -10,3 +10,6 @@ paths = [
 commits = [
     "4782b8f3a4765725e02ded42626a3811759f901a",
 ]
+regexes = [
+    '''GCST\d{8}''',
+]

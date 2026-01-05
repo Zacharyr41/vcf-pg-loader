@@ -5,8 +5,12 @@ import asyncpg
 from .audit.schema import AuditSchemaManager
 from .auth.schema import AuthSchemaManager
 from .data.schema import DisposalSchemaManager
+from .genotypes.schema import GenotypesSchemaManager
+from .partitions import enable_parallel_query, get_partition_stats, verify_partition_pruning
 from .phi.schema import PHISchemaManager
 from .security.schema import SecuritySchemaManager
+from .validation.sql_functions import create_validation_functions
+from .views.prs_views import PRSViewsManager
 
 HUMAN_CHROMOSOMES = [
     "chr1",
@@ -47,6 +51,8 @@ class SchemaManager:
         self._phi_manager = PHISchemaManager()
         self._disposal_manager = DisposalSchemaManager()
         self._security_manager = SecuritySchemaManager()
+        self._genotypes_manager = GenotypesSchemaManager()
+        self._prs_views_manager = PRSViewsManager()
 
     async def create_schema(
         self,
@@ -132,6 +138,10 @@ class SchemaManager:
                 af_gnomad_popmax REAL,
                 af_1kg REAL,
 
+                -- gnomAD popmax with population tracking
+                gnomad_popmax_af REAL,
+                gnomad_popmax_pop VARCHAR(10),
+
                 -- Pathogenicity scores
                 cadd_phred REAL,
                 clinvar_sig VARCHAR(100),
@@ -143,6 +153,30 @@ class SchemaManager:
 
                 -- Sample tracking
                 sample_id VARCHAR(255),
+
+                -- PRS QC metrics (computed at load time)
+                call_rate REAL CHECK (call_rate >= 0 AND call_rate <= 1),
+                n_het INTEGER CHECK (n_het >= 0),
+                n_hom_ref INTEGER CHECK (n_hom_ref >= 0),
+                n_hom_alt INTEGER CHECK (n_hom_alt >= 0),
+                aaf REAL CHECK (aaf >= 0 AND aaf <= 1),
+                maf REAL CHECK (maf >= 0 AND maf <= 0.5),
+                mac INTEGER CHECK (mac >= 0),
+                hwe_p REAL CHECK (hwe_p >= 0 AND hwe_p <= 1),
+
+                -- Imputation quality metrics
+                info_score REAL CHECK (info_score >= 0 AND info_score <= 1),
+                imputation_r2 REAL CHECK (imputation_r2 >= 0 AND imputation_r2 <= 1),
+                is_imputed BOOLEAN DEFAULT FALSE,
+                is_typed BOOLEAN DEFAULT FALSE,
+                imputation_source VARCHAR(50),
+
+                -- HapMap3 reference panel flagging (for PRS analysis)
+                in_hapmap3 BOOLEAN DEFAULT FALSE,
+                hapmap3_rsid VARCHAR(20),
+
+                -- LD block annotation (Berisa & Pickrell 2016)
+                ld_block_id INTEGER,
 
                 -- Audit tracking
                 load_batch_id UUID NOT NULL,
@@ -286,6 +320,30 @@ class SchemaManager:
             WHERE transcript IS NOT NULL
         """)
 
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_variants_info_score
+            ON variants (info_score)
+            WHERE info_score IS NOT NULL
+        """)
+
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_variants_imputed
+            ON variants (is_imputed, info_score)
+            WHERE is_imputed = TRUE
+        """)
+
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_hapmap3_variants
+            ON variants (chrom, pos)
+            WHERE in_hapmap3 = TRUE
+        """)
+
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_variants_ld_block
+            ON variants (ld_block_id)
+            WHERE ld_block_id IS NOT NULL
+        """)
+
     async def drop_indexes(self, conn: asyncpg.Connection) -> list[str]:
         """Drop non-primary key indexes and return their names."""
         indexes = await conn.fetch("""
@@ -403,3 +461,93 @@ class SchemaManager:
     async def verify_emergency_access_schema(self, conn: asyncpg.Connection) -> bool:
         """Verify emergency access schema exists."""
         return await self._auth_manager.emergency_access_exists(conn)
+
+    async def create_genotypes_schema(self, conn: asyncpg.Connection) -> None:
+        """Create genotypes table with partitioning for sample-level genotype storage.
+
+        Creates the genotypes table with:
+        - Hash partitioning by sample_id (16 partitions)
+        - Generated column for ADJ filter status
+        - Indexes for ADJ-passing and dosage queries
+        """
+        await self._genotypes_manager.create_genotypes_schema(conn)
+
+    async def verify_genotypes_schema(self, conn: asyncpg.Connection) -> bool:
+        """Verify genotypes schema exists."""
+        return await self._genotypes_manager.verify_genotypes_schema(conn)
+
+    async def get_genotype_stats(self, conn: asyncpg.Connection) -> dict:
+        """Get genotypes table statistics."""
+        return await self._genotypes_manager.get_genotype_stats(conn)
+
+    async def create_prs_views(self, conn: asyncpg.Connection) -> None:
+        """Create PRS materialized views for optimized query patterns.
+
+        Creates materialized views for:
+        - prs_candidate_variants: HapMap3 variants passing QC filters
+        - variant_qc_summary: Aggregate QC counts
+        - chromosome_variant_counts: Per-chromosome summary
+        """
+        await self._prs_views_manager.create_prs_materialized_views(conn)
+
+    async def refresh_prs_views(
+        self, conn: asyncpg.Connection, concurrent: bool = True
+    ) -> dict[str, float]:
+        """Refresh PRS materialized views.
+
+        Args:
+            conn: Database connection
+            concurrent: If True, use CONCURRENTLY to avoid blocking reads
+
+        Returns:
+            Dictionary mapping view name to refresh time in seconds
+        """
+        return await self._prs_views_manager.refresh_prs_views(conn, concurrent=concurrent)
+
+    async def verify_prs_views(self, conn: asyncpg.Connection) -> bool:
+        """Verify PRS materialized views exist."""
+        return await self._prs_views_manager.verify_prs_views(conn)
+
+    async def drop_prs_views(self, conn: asyncpg.Connection) -> None:
+        """Drop PRS materialized views."""
+        await self._prs_views_manager.drop_prs_views(conn)
+
+    async def create_validation_functions(self, conn: asyncpg.Connection) -> None:
+        """Create SQL validation functions for QC computations.
+
+        Creates the following functions:
+        - hwe_exact_test: Hardy-Weinberg equilibrium exact test
+        - af_from_dosages: Allele frequency from dosage array
+        - n_eff: Effective sample size for case-control
+        - alleles_match: Allele harmonization with strand flip support
+        """
+        await create_validation_functions(conn)
+
+    async def get_partition_stats(self, conn: asyncpg.Connection) -> dict[str, int]:
+        """Get row counts for each partition of the variants table.
+
+        Returns:
+            Dictionary mapping partition name to row count
+        """
+        return await get_partition_stats(conn)
+
+    async def enable_parallel_query(self, conn: asyncpg.Connection, workers: int = 4) -> None:
+        """Enable parallel query execution with specified worker count.
+
+        Sets max_parallel_workers_per_gather for the current session.
+
+        Args:
+            workers: Number of parallel workers (default: 4)
+        """
+        await enable_parallel_query(conn, workers)
+
+    async def verify_partition_pruning(self, conn: asyncpg.Connection, chrom: str) -> dict:
+        """Verify that partition pruning is active for a chromosome query.
+
+        Args:
+            chrom: Chromosome to query (e.g., 'chr1')
+
+        Returns:
+            Dictionary with pruning verification results
+        """
+        return await verify_partition_pruning(conn, chrom)

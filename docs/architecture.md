@@ -6,12 +6,13 @@ This document describes the internal architecture of the vcf-pg-loader system, c
 
 ## Overview
 
-The loader is designed for high-throughput ingestion of VCF files into PostgreSQL, optimized for clinical genomics workflows. Key design goals:
+The loader is designed for high-throughput ingestion of VCF files into PostgreSQL, purpose-built for **Polygenic Risk Score (PRS) research workflows**. Key design goals:
 
 1. **Memory efficiency** - Stream processing without loading entire files
 2. **Correctness** - Proper handling of VCF edge cases (multi-allelics, Number=A/R/G fields)
 3. **Performance** - Binary COPY protocol, index management, batch processing
 4. **Auditability** - Complete load tracking with validation support
+5. **PRS-optimized** - Schema and workflows designed for polygenic risk score analysis
 
 ---
 
@@ -292,3 +293,227 @@ Test VCF fixtures sourced from [slivar](https://github.com/brentp/slivar):
 - Parallel chromosome loading (worker pool)
 - Compressed VCF streaming (already supported by cyvcf2)
 - Unlogged tables during load (with conversion after)
+
+---
+
+## PRS Research Components
+
+### Component Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         CLI Layer (PRS Commands)                         │
+│  import-gwas, import-pgs, load-reference, compute-sample-qc, export-*   │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+          ┌─────────────────────────┼─────────────────────────┐
+          ▼                         ▼                         ▼
+┌─────────────────────┐  ┌─────────────────────┐  ┌─────────────────────┐
+│   GWAS Module       │  │   PRS Module        │  │   Reference Module  │
+│                     │  │                     │  │                     │
+│  gwas/loader.py     │  │  prs/loader.py      │  │  references/*.py    │
+│  gwas/schema.py     │  │  prs/schema.py      │  │  - hapmap3.py       │
+│  gwas/models.py     │  │  prs/pgs_catalog.py │  │  - ld_blocks.py     │
+└─────────────────────┘  └─────────────────────┘  └─────────────────────┘
+          │                         │                         │
+          └─────────────────────────┼─────────────────────────┘
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         QC & Validation Layer                            │
+│  qc/variant_qc.py, qc/sample_qc.py, validation/sql_functions.py         │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                      Export & Views Layer                                │
+│  export/prs_formats.py, views/prs_views.py                              │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### GWAS Module (`gwas/`)
+
+Handles GWAS summary statistics following the GWAS-SSF standard.
+
+**Components:**
+- `schema.py` - Creates `studies` and `gwas_summary_stats` tables
+- `loader.py` - Parses and loads summary statistics files
+- `models.py` - Data models for GWAS records
+
+**Supported Formats:**
+- Tab-separated values with standard column headers
+- Automatic column mapping (BETA/OR, CHROM/CHR, etc.)
+- P-value and effect size validation
+
+### PRS Module (`prs/`)
+
+Manages PGS Catalog scoring files.
+
+**Components:**
+- `schema.py` - Creates `pgs_scores` and `prs_weights` tables
+- `loader.py` - Loads PGS Catalog scoring files
+- `pgs_catalog.py` - PGS Catalog file format parser
+- `models.py` - PRS weight data models
+
+**Variant Matching:**
+1. First pass: Match by chromosome + position + alleles
+2. Unmatched variants stored with `variant_id = NULL`
+3. Statistics reported: loaded count, matched count, match rate
+
+### Reference Module (`references/`)
+
+Manages reference panels and LD block definitions.
+
+**Components:**
+- `hapmap3.py` - HapMap3 SNP set loader
+- `ld_blocks.py` - Berisa & Pickrell LD block loader
+- `schema.py` - Creates `reference_panels` and `ld_blocks` tables
+
+**HapMap3 Integration:**
+- ~1.1M variants commonly used for PRS methods
+- Adds `in_hapmap3` boolean column to variants table
+- Required for PRS-CS, LDpred2, and similar methods
+
+### QC Module (`qc/`)
+
+Computes quality control metrics at load time and on-demand.
+
+**Variant QC (`variant_qc.py`):**
+- Genotype counts (n_het, n_hom_ref, n_hom_alt)
+- Allele frequencies (AAF, MAF, MAC)
+- Hardy-Weinberg equilibrium exact test
+
+**Sample QC (`sample_qc.py`):**
+- Call rate
+- Het/hom ratio
+- Ti/Tv ratio
+- Sex inference from X chromosome
+- F inbreeding coefficient
+
+### Genotypes Module (`genotypes/`)
+
+Stores individual-level genotype data with imputation support.
+
+**Key Features:**
+- Hash-partitioned by `sample_id` (16 partitions)
+- Dosage and GP (genotype probability) support
+- Generated `passes_adj` column for GATK-style filtering
+- Efficient PRS calculation via dosage-weighted sums
+
+### Views Module (`views/`)
+
+Pre-computed materialized views for common query patterns.
+
+**Views:**
+- `prs_candidate_variants` - HapMap3 + QC filters
+- `variant_qc_summary` - Aggregate statistics
+- `chromosome_variant_counts` - Per-chromosome breakdown
+
+**Concurrent Refresh:**
+```python
+await conn.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY prs_candidate_variants")
+```
+
+### Export Module (`export/`)
+
+Exports data to downstream PRS tools.
+
+**Supported Formats:**
+| Format | Tool | Columns |
+|--------|------|---------|
+| PLINK score | PLINK 2.0 | SNP, A1, BETA |
+| PRS-CS | PRS-CS | SNP, A1, A2, BETA, SE/P |
+| LDpred2 | bigsnpr | chr, pos, a0, a1, beta, beta_se, n_eff |
+| PRSice-2 | PRSice-2 | SNP, A1, A2, BETA, SE, P |
+
+---
+
+## PRS Data Flows
+
+### GWAS Import Flow
+
+```
+1. CLI: vcf-pg-loader import-gwas sumstats.tsv --study-id GCST...
+2. GWASLoader parses header, detects column mapping
+3. Study metadata inserted into `studies` table
+4. For each row:
+   a. Parse effect allele, beta/OR, SE, p-value
+   b. Match to variants by chrom + pos + alleles
+   c. Insert into `gwas_summary_stats`
+5. Create indexes on p-value, study_id
+```
+
+### PGS Catalog Import Flow
+
+```
+1. CLI: vcf-pg-loader import-pgs PGS000001.txt
+2. PRSLoader parses PGS Catalog header (pgs_id, trait, build)
+3. Score metadata inserted into `pgs_scores` table
+4. For each weight:
+   a. Parse effect allele, weight, position
+   b. Match to variants table
+   c. Insert into `prs_weights`
+5. Report: loaded/matched/total variants
+```
+
+### PRS Calculation Flow
+
+```sql
+SELECT
+    g.sample_id,
+    SUM(w.effect_weight * g.dosage) as prs_raw
+FROM genotypes g
+JOIN prs_weights w ON g.variant_id = w.variant_id
+JOIN prs_candidate_variants c ON g.variant_id = c.variant_id
+WHERE w.pgs_id = 'PGS000018'
+GROUP BY g.sample_id;
+```
+
+### Export to PRS Tools Flow
+
+```
+1. CLI: vcf-pg-loader export-prs-cs --study-id 1 --output gwas.txt
+2. Query gwas_summary_stats joined with variants
+3. Apply filters (HapMap3, MAF, INFO)
+4. Format output per tool specification
+5. Write to file with appropriate headers
+```
+
+---
+
+## SQL Functions
+
+Custom PostgreSQL functions for in-database computation:
+
+### HWE Exact Test
+
+```sql
+SELECT hwe_exact_test(100, 50, 10) as hwe_p;
+-- Returns: 0.023 (two-sided p-value)
+```
+
+Implementation follows Wigginton et al. (2005).
+
+### Allele Frequency from Dosages
+
+```sql
+SELECT af_from_dosages(ARRAY[0.0, 1.0, 1.5, 2.0]) as af;
+-- Returns: 0.5625
+```
+
+### Effective Sample Size
+
+```sql
+SELECT n_eff(10000, 50000) as n_eff;
+-- Returns: 16666.67
+```
+
+Used for case-control studies in PRS methods.
+
+### Allele Harmonization
+
+```sql
+SELECT alleles_match('A', 'G', 'T', 'C') as matches;
+-- Returns: TRUE (strand flip: A=T, G=C)
+```
+
+Handles direct match, allele swap, and strand flip.

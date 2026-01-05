@@ -5,7 +5,12 @@
 [![PyPI version](https://badge.fury.io/py/vcf-pg-loader.svg)](https://badge.fury.io/py/vcf-pg-loader)
 [![nf-core module](https://img.shields.io/badge/nf--core-module-blue?logo=nextflow)](https://nf-co.re/modules/vcfpgloader_load)
 
-High-performance VCF to PostgreSQL loader with clinical-grade compliance.
+![PRS-CS](https://img.shields.io/badge/PRS--CS-supported-success)
+![LDpred2](https://img.shields.io/badge/LDpred2-supported-success)
+![PRSice--2](https://img.shields.io/badge/PRSice--2-supported-success)
+![PLINK](https://img.shields.io/badge/PLINK%202.0-supported-success)
+
+High-performance VCF to PostgreSQL loader with clinical-grade compliance, purpose-built for **Polygenic Risk Score (PRS) research**.
 
 ## Video Tutorials
 
@@ -17,20 +22,52 @@ High-performance VCF to PostgreSQL loader with clinical-grade compliance.
 
 [![vcf-pg-loader Demo](https://img.youtube.com/vi/yJbYF2GR2uI/maxresdefault.jpg)](https://www.youtube.com/watch?v=yJbYF2GR2uI)
 
+## PRS Research Features
+
+vcf-pg-loader provides a complete data infrastructure for polygenic risk score research:
+
+| Feature | Description |
+|---------|-------------|
+| **GWAS Summary Statistics** | Import and query GWAS results in [GWAS-SSF](https://www.ebi.ac.uk/gwas/docs/methods/summary-statistics) standard format |
+| **PGS Catalog Integration** | Load PRS weights directly from [PGS Catalog](https://www.pgscatalog.org/) scoring files |
+| **HapMap3 Reference Panel** | Built-in support for HapMap3 SNPs used by PRS-CS, LDpred2, and other methods |
+| **LD Block Annotations** | Berisa & Pickrell (2016) LD blocks for Bayesian PRS methods |
+| **Multi-Ancestry Frequencies** | Population-specific allele frequencies from gnomAD for ancestry-aware PRS |
+| **Genotype Dosages** | Imputation dosages and genotype probabilities (GP) for accurate PRS calculation |
+| **Sample QC Metrics** | Call rate, het/hom ratio, Ti/Tv, sex inference, and contamination checks |
+| **Variant QC Metrics** | HWE exact test, INFO score, call rate, MAF computed at load time |
+| **Materialized Views** | Pre-computed PRS-ready variant sets with concurrent refresh |
+| **Export to PRS Tools** | Direct export to PLINK, PRS-CS, LDpred2, and PRSice-2 formats |
+
 ## Features
 
+### Core VCF Loading
 - **Streaming VCF parsing** with cyvcf2 for memory-efficient processing
 - **Variant normalization** using the vt algorithm (left-align and trim)
 - **Number=A/R/G field handling** - proper per-ALT extraction during multi-allelic decomposition
 - **Binary COPY protocol** via asyncpg for maximum insert performance
 - **Chromosome-partitioned tables** for efficient region queries
 - **Human and non-human genome support** - chromosome enum for human, TEXT for others
+
+### PRS Data Management
+- **GWAS summary statistics** - import GWAS-SSF format files with study metadata
+- **PGS Catalog weights** - load scoring files with automatic variant matching
+- **Reference panels** - HapMap3 SNP sets for LD-aware PRS methods
+- **LD block definitions** - genome partitioning for PRS-CS and SBayesR
+- **Population frequencies** - multi-ancestry AF from gnomAD, 1000 Genomes
+- **Genotype storage** - hash-partitioned with dosage and GP support
+
+### Quality Control
+- **Variant QC** - HWE p-value, INFO score, call rate, AAF/MAF/MAC
+- **Sample QC** - call rate, het/hom ratio, Ti/Tv, F coefficient, sex inference
+- **Materialized views** - pre-filtered PRS candidate variants
+- **SQL functions** - HWE exact test, allele harmonization in-database
+
+### Infrastructure
 - **Audit trail** with load batch tracking and validation
 - **CLI interface** with Typer for easy operation
 - **TOML configuration** - file-based configuration with CLI overrides
 - **Progress reporting** - real-time progress bar with `rich`
-- **Structured logging** - configurable verbosity levels
-- **Retry logic** - exponential backoff for transient database failures
 - **Docker support** - multi-stage Dockerfile and docker-compose for development
 - **Zero-config database** - auto-managed PostgreSQL via Docker, no setup required
 
@@ -186,6 +223,47 @@ vcf-pg-loader load sarscov2.vcf.gz --no-human-genome
 
 # Initialize for non-human genomes
 vcf-pg-loader init-db --db postgresql://... --no-human-genome
+```
+
+### PRS Workflow Quick Start
+
+```bash
+# 1. Load imputed VCF with genotype dosages
+vcf-pg-loader load imputed.vcf.gz --db postgresql://localhost/prs_db
+
+# 2. Import GWAS summary statistics
+vcf-pg-loader import-gwas gwas_sumstats.tsv \
+    --study-id GCST90012345 \
+    --trait "Type 2 Diabetes" \
+    --db postgresql://localhost/prs_db
+
+# 3. Load PGS Catalog weights
+vcf-pg-loader import-pgs PGS000001_hmPOS_GRCh38.txt \
+    --db postgresql://localhost/prs_db
+
+# 4. Load HapMap3 reference panel
+vcf-pg-loader load-reference hapmap3.tsv \
+    --panel-name hapmap3 \
+    --db postgresql://localhost/prs_db
+
+# 5. Annotate variants with LD blocks
+vcf-pg-loader annotate-ld-blocks \
+    --population EUR \
+    --db postgresql://localhost/prs_db
+
+# 6. Compute sample QC metrics
+vcf-pg-loader compute-sample-qc \
+    --db postgresql://localhost/prs_db
+
+# 7. Refresh materialized views for fast queries
+vcf-pg-loader refresh-views --db postgresql://localhost/prs_db
+
+# 8. Export to PRS-CS format
+vcf-pg-loader export-prs-cs \
+    --study-id 1 \
+    --output gwas_prscs.txt \
+    --hapmap3-only \
+    --db postgresql://localhost/prs_db
 ```
 
 ## CLI Commands
@@ -448,7 +526,20 @@ uv run mypy src
 
 ## Documentation
 
+### Getting Started
 - [CLI Reference](docs/cli-reference.md) - Complete command-line documentation
+- [PRS Workflows](docs/prs-workflows.md) - End-to-end PRS analysis pipelines
+
+### Schema Reference
+- [Schema Overview](docs/schema/index.md) - Complete database schema with ER diagrams
+- [PRS Tables](docs/schema/prs-tables.md) - PGS scores and weights storage
+- [GWAS Tables](docs/schema/gwas-tables.md) - Summary statistics (GWAS-SSF)
+- [Reference Tables](docs/schema/reference-tables.md) - HapMap3, LD blocks
+- [Genotypes Tables](docs/schema/genotypes-tables.md) - Individual-level data
+- [QC Tables](docs/schema/qc-tables.md) - Sample and variant QC metrics
+- [Materialized Views](docs/schema/views.md) - Pre-computed PRS query results
+
+### Background
 - [Genomics Concepts](docs/genomics-concepts.md) - Understanding VCF data for non-geneticists
 - [Glossary of Terms](docs/glossary-of-terms.md) - Technical terminology reference
 - [Architecture](docs/architecture.md) - Detailed system design and implementation
