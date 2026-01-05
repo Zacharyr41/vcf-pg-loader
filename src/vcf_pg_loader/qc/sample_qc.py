@@ -21,8 +21,23 @@ from .schema import SampleQCSchemaManager
 
 logger = logging.getLogger(__name__)
 
-MALE_X_HET_THRESHOLD = 0.05
-FEMALE_X_HET_THRESHOLD = 0.15
+
+@dataclass(frozen=True)
+class SampleQCConfig:
+    """Configuration for sample QC thresholds.
+
+    All thresholds have sensible defaults based on Pe'er pipeline standards.
+    """
+
+    male_x_het_threshold: float = 0.05
+    female_x_het_threshold: float = 0.15
+    min_call_rate: float = 0.99
+    max_contamination: float = 0.025
+    x_par_start: int = 2781479
+    x_par_end: int = 155701383
+
+
+DEFAULT_QC_CONFIG = SampleQCConfig()
 
 TRANSITIONS = {
     ("A", "G"),
@@ -102,7 +117,11 @@ def compute_ti_tv_ratio(transitions: int, transversions: int) -> float | None:
     return transitions / transversions
 
 
-def infer_sex_from_x_het(x_het_rate: float) -> str:
+def infer_sex_from_x_het(
+    x_het_rate: float,
+    male_threshold: float | None = None,
+    female_threshold: float | None = None,
+) -> str:
     """Infer genetic sex from X chromosome heterozygosity rate.
 
     Males (XY) should have very low X chromosome heterozygosity
@@ -111,13 +130,20 @@ def infer_sex_from_x_het(x_het_rate: float) -> str:
 
     Args:
         x_het_rate: Heterozygosity rate on X chromosome
+        male_threshold: Max het rate to infer male (default: 0.05)
+        female_threshold: Min het rate to infer female (default: 0.15)
 
     Returns:
         "M" for male, "F" for female, "unknown" for ambiguous
     """
-    if x_het_rate <= MALE_X_HET_THRESHOLD:
+    if male_threshold is None:
+        male_threshold = DEFAULT_QC_CONFIG.male_x_het_threshold
+    if female_threshold is None:
+        female_threshold = DEFAULT_QC_CONFIG.female_x_het_threshold
+
+    if x_het_rate <= male_threshold:
         return "M"
-    elif x_het_rate >= FEMALE_X_HET_THRESHOLD:
+    elif x_het_rate >= female_threshold:
         return "F"
     else:
         return "unknown"
@@ -147,26 +173,35 @@ def evaluate_qc_pass(
     call_rate: float,
     contamination_estimate: float | None = None,
     sex_concordant: bool | None = None,
+    min_call_rate: float | None = None,
+    max_contamination: float | None = None,
 ) -> bool:
     """Evaluate if a sample passes QC criteria.
 
-    Criteria (Pe'er pipeline thresholds):
-    - call_rate >= 0.99 (99%)
-    - contamination_estimate < 0.025 (2.5%) or NULL
+    Criteria (Pe'er pipeline thresholds by default):
+    - call_rate >= min_call_rate (default: 99%)
+    - contamination_estimate < max_contamination (default: 2.5%) or NULL
     - sex_concordant = TRUE or NULL
 
     Args:
         call_rate: Sample call rate
         contamination_estimate: Estimated contamination fraction
         sex_concordant: Whether inferred sex matches reported sex
+        min_call_rate: Minimum acceptable call rate (default: 0.99)
+        max_contamination: Maximum acceptable contamination (default: 0.025)
 
     Returns:
         True if sample passes all criteria
     """
-    if call_rate < 0.99:
+    if min_call_rate is None:
+        min_call_rate = DEFAULT_QC_CONFIG.min_call_rate
+    if max_contamination is None:
+        max_contamination = DEFAULT_QC_CONFIG.max_contamination
+
+    if call_rate < min_call_rate:
         return False
 
-    if contamination_estimate is not None and contamination_estimate >= 0.025:
+    if contamination_estimate is not None and contamination_estimate >= max_contamination:
         return False
 
     if sex_concordant is not None and not sex_concordant:
@@ -224,8 +259,13 @@ class SampleQCMetrics:
 class SampleQCComputer:
     """Computes sample QC metrics from loaded variant data."""
 
-    def __init__(self, schema_manager: SampleQCSchemaManager | None = None):
+    def __init__(
+        self,
+        schema_manager: SampleQCSchemaManager | None = None,
+        config: SampleQCConfig | None = None,
+    ):
         self._schema_manager = schema_manager or SampleQCSchemaManager()
+        self._config = config or DEFAULT_QC_CONFIG
 
     async def compute_for_batch(
         self,
@@ -267,7 +307,13 @@ class SampleQCComputer:
         n_pass = sum(
             1
             for m in results
-            if evaluate_qc_pass(m.call_rate, m.contamination_estimate, m.sex_concordant)
+            if evaluate_qc_pass(
+                m.call_rate,
+                m.contamination_estimate,
+                m.sex_concordant,
+                min_call_rate=self._config.min_call_rate,
+                max_contamination=self._config.max_contamination,
+            )
         )
 
         return {
@@ -360,7 +406,11 @@ class SampleQCComputer:
         ti_tv_ratio = compute_ti_tv_ratio(ti_tv["transitions"], ti_tv["transversions"])
 
         x_stats = await self._compute_x_chromosome_stats(conn, sample_id)
-        sex_inferred = infer_sex_from_x_het(x_stats["x_het_rate"])
+        sex_inferred = infer_sex_from_x_het(
+            x_stats["x_het_rate"],
+            male_threshold=self._config.male_x_het_threshold,
+            female_threshold=self._config.female_x_het_threshold,
+        )
 
         sex_concordant = None
         if sex_reported and sex_inferred != "unknown":
@@ -428,9 +478,11 @@ class SampleQCComputer:
             FROM variants
             WHERE sample_id = $1
             AND chrom IN ('chrX', 'X')
-            AND pos > 2781479 AND pos < 155701383
+            AND pos > $2 AND pos < $3
             """,
             sample_id,
+            self._config.x_par_start,
+            self._config.x_par_end,
         )
 
         n_total = stats["n_total"] or 0

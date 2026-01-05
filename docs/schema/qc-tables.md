@@ -79,14 +79,51 @@ qc_pass = (
 
 ### QC Thresholds
 
-Based on common practices (e.g., gnomAD, UK Biobank):
+Default thresholds based on common practices (e.g., gnomAD, UK Biobank):
 
-| Metric | Threshold | Rationale |
-|--------|-----------|-----------|
+| Metric | Default Threshold | Rationale |
+|--------|-------------------|-----------|
 | Call rate | >= 99% | Sample quality |
 | Contamination | < 2.5% | Sample swap/mix |
 | Sex concordance | TRUE | Sample swap |
 | F coefficient | -0.2 to 0.2 | Contamination/inbreeding |
+| Male X het rate | <= 5% | Sex inference |
+| Female X het rate | >= 15% | Sex inference |
+
+### Configurable Thresholds (Python API)
+
+All QC thresholds can be customized via `SampleQCConfig`:
+
+```python
+from vcf_pg_loader.qc.sample_qc import SampleQCConfig, SampleQCComputer
+
+# Use default thresholds
+computer = SampleQCComputer()
+
+# Customize thresholds for your cohort
+custom_config = SampleQCConfig(
+    min_call_rate=0.95,           # Relax call rate to 95%
+    max_contamination=0.05,        # Allow up to 5% contamination
+    male_x_het_threshold=0.03,     # Stricter male inference
+    female_x_het_threshold=0.20,   # Stricter female inference
+    x_par_start=2781479,           # X chromosome PAR region start
+    x_par_end=155701383,           # X chromosome PAR region end
+)
+computer = SampleQCComputer(config=custom_config)
+```
+
+Individual functions also accept threshold overrides:
+
+```python
+from vcf_pg_loader.qc.sample_qc import infer_sex_from_x_het, evaluate_qc_pass
+
+# Override sex inference thresholds
+sex = infer_sex_from_x_het(het_rate, male_threshold=0.03, female_threshold=0.20)
+
+# Override QC pass criteria
+passed = evaluate_qc_pass(call_rate, contamination, sex_concordant,
+                          min_call_rate=0.95, max_contamination=0.05)
+```
 
 ### Indexes
 
