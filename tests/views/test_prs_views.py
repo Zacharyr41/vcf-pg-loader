@@ -91,6 +91,30 @@ async def db_with_variants(pg_pool):
                 row["variant_id"],
             )
 
+        variant_ids_for_afr = await conn.fetch(
+            "SELECT variant_id FROM variants WHERE chrom = 'chr1' ORDER BY pos LIMIT 2"
+        )
+        for row in variant_ids_for_afr:
+            await conn.execute(
+                """
+                INSERT INTO population_frequencies (variant_id, source, population, af)
+                VALUES ($1, 'gnomAD_v3', 'AFR', 0.12)
+                """,
+                row["variant_id"],
+            )
+
+        variant_ids_for_eas = await conn.fetch(
+            "SELECT variant_id FROM variants WHERE chrom = 'chr1' ORDER BY pos LIMIT 2"
+        )
+        for row in variant_ids_for_eas:
+            await conn.execute(
+                """
+                INSERT INTO population_frequencies (variant_id, source, population, af)
+                VALUES ($1, 'gnomAD_v3', 'EAS', 0.08)
+                """,
+                row["variant_id"],
+            )
+
     yield pg_pool
 
 
@@ -183,6 +207,51 @@ class TestPRSCandidateVariantsView:
             )
             assert has_gnomad >= 1
 
+    async def test_view_has_multi_population_columns(self, db_with_variants):
+        """Verify view has columns for NFE, AFR, and EAS populations."""
+        from vcf_pg_loader.views.prs_views import PRSViewsManager
+
+        async with db_with_variants.acquire() as conn:
+            mgr = PRSViewsManager()
+            await mgr.create_prs_candidate_variants_view(conn)
+
+            columns = await conn.fetch("""
+                SELECT attname AS column_name
+                FROM pg_attribute a
+                JOIN pg_class c ON a.attrelid = c.oid
+                WHERE c.relname = 'prs_candidate_variants'
+                AND a.attnum > 0
+                AND NOT a.attisdropped
+                AND attname LIKE 'gnomad_%_af'
+            """)
+            column_names = {row["column_name"] for row in columns}
+
+            assert "gnomad_nfe_af" in column_names, "Missing NFE population column"
+            assert "gnomad_afr_af" in column_names, "Missing AFR population column"
+            assert "gnomad_eas_af" in column_names, "Missing EAS population column"
+
+    async def test_each_population_af_populated_independently(self, db_with_variants):
+        """Verify each population AF can be populated independently."""
+        from vcf_pg_loader.views.prs_views import PRSViewsManager
+
+        async with db_with_variants.acquire() as conn:
+            mgr = PRSViewsManager()
+            await mgr.create_prs_candidate_variants_view(conn)
+
+            has_nfe = await conn.fetchval(
+                "SELECT COUNT(*) FROM prs_candidate_variants WHERE gnomad_nfe_af IS NOT NULL"
+            )
+            has_afr = await conn.fetchval(
+                "SELECT COUNT(*) FROM prs_candidate_variants WHERE gnomad_afr_af IS NOT NULL"
+            )
+            has_eas = await conn.fetchval(
+                "SELECT COUNT(*) FROM prs_candidate_variants WHERE gnomad_eas_af IS NOT NULL"
+            )
+
+            assert has_nfe >= 1, "Expected at least one variant with NFE AF"
+            assert has_afr >= 1, "Expected at least one variant with AFR AF"
+            assert has_eas >= 1, "Expected at least one variant with EAS AF"
+
     async def test_view_includes_gwas_stats(self, db_with_variants):
         from vcf_pg_loader.views.prs_views import PRSViewsManager
 
@@ -194,6 +263,44 @@ class TestPRSCandidateVariantsView:
                 "SELECT COUNT(*) FROM prs_candidate_variants WHERE beta IS NOT NULL"
             )
             assert has_beta >= 1
+
+    async def test_view_requires_gwas_stats(self, db_with_variants):
+        """Verify all variants in view have GWAS summary stats (no NULL betas)."""
+        from vcf_pg_loader.views.prs_views import PRSViewsManager
+
+        async with db_with_variants.acquire() as conn:
+            mgr = PRSViewsManager()
+            await mgr.create_prs_candidate_variants_view(conn)
+
+            null_beta_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM prs_candidate_variants WHERE beta IS NULL"
+            )
+            assert null_beta_count == 0, "PRS view should only include variants with GWAS data"
+
+    async def test_view_excludes_variants_without_gwas(self, db_with_variants):
+        """Verify variants without GWAS stats are excluded from view."""
+        from vcf_pg_loader.views.prs_views import PRSViewsManager
+
+        async with db_with_variants.acquire() as conn:
+            mgr = PRSViewsManager()
+            await mgr.create_prs_candidate_variants_view(conn)
+
+            view_count = await conn.fetchval("SELECT COUNT(*) FROM prs_candidate_variants")
+
+            gwas_variant_count = await conn.fetchval("""
+                SELECT COUNT(DISTINCT v.variant_id)
+                FROM variants v
+                INNER JOIN gwas_summary_stats ss ON v.variant_id = ss.variant_id
+                WHERE v.in_hapmap3 = TRUE
+                    AND v.info_score >= 0.6
+                    AND v.call_rate >= 0.98
+                    AND v.hwe_p > 1e-6
+                    AND v.maf >= 0.01
+            """)
+
+            assert (
+                view_count == gwas_variant_count
+            ), "View should only contain variants with GWAS stats"
 
     async def test_unique_index_created(self, db_with_variants):
         from vcf_pg_loader.views.prs_views import PRSViewsManager

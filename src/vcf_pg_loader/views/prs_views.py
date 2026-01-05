@@ -44,16 +44,26 @@ class PRSViewsManager:
                 v.in_hapmap3,
                 v.ld_block_id,
                 v.load_batch_id,
-                pf.af AS gnomad_nfe_af,
+                pf_nfe.af AS gnomad_nfe_af,
+                pf_afr.af AS gnomad_afr_af,
+                pf_eas.af AS gnomad_eas_af,
                 ss.beta,
                 ss.standard_error,
                 ss.p_value
             FROM variants v
-            LEFT JOIN population_frequencies pf
-                ON v.variant_id = pf.variant_id
-                AND pf.population = 'NFE'
-                AND pf.source = 'gnomAD_v3'
-            LEFT JOIN gwas_summary_stats ss
+            LEFT JOIN population_frequencies pf_nfe
+                ON v.variant_id = pf_nfe.variant_id
+                AND pf_nfe.population = 'NFE'
+                AND pf_nfe.source = 'gnomAD_v3'
+            LEFT JOIN population_frequencies pf_afr
+                ON v.variant_id = pf_afr.variant_id
+                AND pf_afr.population = 'AFR'
+                AND pf_afr.source = 'gnomAD_v3'
+            LEFT JOIN population_frequencies pf_eas
+                ON v.variant_id = pf_eas.variant_id
+                AND pf_eas.population = 'EAS'
+                AND pf_eas.source = 'gnomAD_v3'
+            INNER JOIN gwas_summary_stats ss
                 ON v.variant_id = ss.variant_id
             WHERE v.in_hapmap3 = TRUE
                 AND v.info_score >= 0.6
